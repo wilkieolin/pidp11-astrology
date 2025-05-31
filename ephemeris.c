@@ -324,7 +324,6 @@ int *num_planets;
     }
 
     /* Skip header lines */
-    if (fgets(line1, sizeof(line1), fp) == NULL) { fclose(fp); return FALSE; } /* Skip "a e I L Ω varpi" */
     if (fgets(line1, sizeof(line1), fp) == NULL) { fclose(fp); return FALSE; } /* Skip units line */
 
     while (count < MAX_PLANETS &&
