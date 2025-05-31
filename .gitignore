@@ -1,3 +1,4 @@
 core
 core.dSYM/*
 .vscode
+*.out
