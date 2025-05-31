@@ -99,90 +99,166 @@ typedef struct {
     Vector3D acceleration; /* m/s^2 (current net acceleration) */
 } Planet;
 
+/* --- File Reading Function --- */
+/*
+ * Reads planet orbital data from a specified file.
+ * File format per planet (values separated by whitespace/newlines):
+ *   PlanetName (string, no spaces, max 19 chars)
+ *   Mass_kg (double)
+ *   PositionX_m PositionY_m PositionZ_m (3 doubles)
+ *   VelocityX_mps VelocityY_mps VelocityZ_mps (3 doubles)
+ *
+ * Returns the number of planets successfully read.
+ * Returns -1 if the file cannot be opened.
+ * Returns 0 to (max_planets_to_read - 1) if an error occurs during parsing
+ * or EOF is reached prematurely.
+ */
+int read_planet_data_from_file(filename, planets_out, max_planets_to_read)
+    char filename[];
+    Planet planets_out[];
+    int max_planets_to_read;
+{
+    FILE *fp;
+    int i;
+    int planets_read_count;
+    /* K&R C: all declarations at the top */
+
+    fp = fopen(filename, "r");
+    if (fp == NULL) {
+        /* perror("Error opening planet data file"); Not available on all K&R systems */
+        fprintf(stderr, "Error: Could not open planet data file '%s'\n", filename);
+        return -1; /* Indicate file open error */
+    }
+
+    planets_read_count = 0;
+    for (i = 0; i < max_planets_to_read; ++i) {
+        /* fscanf returns the number of items successfully assigned. */
+        /* We expect 1 for name, 1 for mass, 3 for position, 3 for velocity. */
+
+        if (fscanf(fp, "%19s", planets_out[i].name) != 1) break;
+
+        if (fscanf(fp, "%lf", &planets_out[i].mass) != 1) break;
+        
+        if (fscanf(fp, "%lf %lf %lf", &planets_out[i].position.x,
+                                      &planets_out[i].position.y,
+                                      &planets_out[i].position.z) != 3) break;
+
+        if (fscanf(fp, "%lf %lf %lf", &planets_out[i].velocity.x,
+                                      &planets_out[i].velocity.y,
+                                      &planets_out[i].velocity.z) != 3) break;
+        planets_read_count++;
+    }
+
+    fclose(fp);
+    return planets_read_count;
+}
+
 /* --- Initialization --- */
 /* This function sets up the initial state of the solar system. */
-/* IMPORTANT: To meet the requirement of intaking starting positions for a specific date/time, */
-/* you should modify this function to read data from a file or user input. */
+/* It will attempt to load data from data_filename if provided. */
+/* Otherwise, it uses hardcoded simplified initial conditions. */
 /* Data for specific epochs can be obtained from NASA's JPL HORIZONS system. */
-/* The current implementation uses simplified, approximate initial conditions */
-/* (planets on the x-axis, y-velocities for ~circular orbits) for demonstration. */
-void initialize_solar_system(planets)
+void initialize_solar_system(planets, data_filename)
     Planet planets[];
+    char data_filename[]; /* Can be NULL or empty string to use defaults */
 {
-    /* Local variable declarations must be at the top of the block in K&R C */
+    /* K&R C: All local variable declarations at the top of the block */
     double r_mercury, r_venus, r_earth, r_mars, r_jupiter, r_saturn, r_uranus, r_neptune, r_pluto;
     int i;
+    int planets_loaded_count;
 
-    /* Sun (Body 0) */
-    strcpy(planets[0].name, "Sun");
-    planets[0].mass = 1.989e30;
-    planets[0].position = V_init(0.0, 0.0, 0.0);
-    planets[0].velocity = V_init(0.0, 0.0, 0.0);
+    planets_loaded_count = 0; /* Default to 0, indicating data not loaded from file yet */
 
-    /* Mercury */
-    strcpy(planets[1].name, "Mercury");
-    planets[1].mass = 3.301e23;
-    r_mercury = 0.387 * AU;
-    planets[1].position = V_init(r_mercury, 0.0, 0.0);
-    planets[1].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_mercury), 0.0);
+    if (data_filename != NULL && data_filename[0] != '\0') {
+        planets_loaded_count = read_planet_data_from_file(data_filename, planets, NUM_BODIES);
+        if (planets_loaded_count == NUM_BODIES) {
+            printf("Successfully loaded %d planets from %s\n", planets_loaded_count, data_filename);
+        } else {
+            if (planets_loaded_count == -1) { /* File open error already printed by read_planet_data_from_file */
+                 fprintf(stderr, "Warning: Using default initial conditions due to file error.\n");
+            } else { /* Partial read or format error */
+                 fprintf(stderr, "Warning: Failed to load all planets correctly from %s (loaded %d, expected %d). Using default initial conditions.\n",
+                    data_filename, planets_loaded_count, NUM_BODIES);
+            }
+            planets_loaded_count = 0; /* Ensure fallback to defaults */
+        }
+    } else {
+        printf("No data file specified. Using hardcoded default initial conditions for planets.\n");
+    }
 
-    /* Venus */
-    strcpy(planets[2].name, "Venus");
-    planets[2].mass = 4.867e24;
-    r_venus = 0.723 * AU;
-    planets[2].position = V_init(r_venus, 0.0, 0.0);
-    planets[2].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_venus), 0.0);
+    if (planets_loaded_count != NUM_BODIES) {
+        printf("Initializing planets with hardcoded default values.\n");
+        /* Sun (Body 0) */
+        strcpy(planets[0].name, "Sun");
+        planets[0].mass = 1.989e30;
+        planets[0].position = V_init(0.0, 0.0, 0.0);
+        planets[0].velocity = V_init(0.0, 0.0, 0.0);
 
-    /* Earth */
-    strcpy(planets[3].name, "Earth");
-    planets[3].mass = 5.972e24;
-    r_earth = 1.000 * AU;
-    planets[3].position = V_init(r_earth, 0.0, 0.0);
-    planets[3].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_earth), 0.0);
+        /* Mercury */
+        strcpy(planets[1].name, "Mercury");
+        planets[1].mass = 3.301e23;
+        r_mercury = 0.387 * AU;
+        planets[1].position = V_init(r_mercury, 0.0, 0.0);
+        planets[1].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_mercury), 0.0);
 
-    /* Mars */
-    strcpy(planets[4].name, "Mars");
-    planets[4].mass = 6.417e23;
-    r_mars = 1.524 * AU;
-    planets[4].position = V_init(r_mars, 0.0, 0.0);
-    planets[4].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_mars), 0.0);
+        /* Venus */
+        strcpy(planets[2].name, "Venus");
+        planets[2].mass = 4.867e24;
+        r_venus = 0.723 * AU;
+        planets[2].position = V_init(r_venus, 0.0, 0.0);
+        planets[2].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_venus), 0.0);
 
-    /* Jupiter */
-    strcpy(planets[5].name, "Jupiter");
-    planets[5].mass = 1.898e27;
-    r_jupiter = 5.203 * AU;
-    planets[5].position = V_init(r_jupiter, 0.0, 0.0);
-    planets[5].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_jupiter), 0.0);
+        /* Earth */
+        strcpy(planets[3].name, "Earth");
+        planets[3].mass = 5.972e24;
+        r_earth = 1.000 * AU;
+        planets[3].position = V_init(r_earth, 0.0, 0.0);
+        planets[3].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_earth), 0.0);
 
-    /* Saturn */
-    strcpy(planets[6].name, "Saturn");
-    planets[6].mass = 5.683e26;
-    r_saturn = 9.537 * AU;
-    planets[6].position = V_init(r_saturn, 0.0, 0.0);
-    planets[6].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_saturn), 0.0);
+        /* Mars */
+        strcpy(planets[4].name, "Mars");
+        planets[4].mass = 6.417e23;
+        r_mars = 1.524 * AU;
+        planets[4].position = V_init(r_mars, 0.0, 0.0);
+        planets[4].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_mars), 0.0);
 
-    /* Uranus */
-    strcpy(planets[7].name, "Uranus");
-    planets[7].mass = 8.681e25;
-    r_uranus = 19.191 * AU;
-    planets[7].position = V_init(r_uranus, 0.0, 0.0);
-    planets[7].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_uranus), 0.0);
+        /* Jupiter */
+        strcpy(planets[5].name, "Jupiter");
+        planets[5].mass = 1.898e27;
+        r_jupiter = 5.203 * AU;
+        planets[5].position = V_init(r_jupiter, 0.0, 0.0);
+        planets[5].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_jupiter), 0.0);
 
-    /* Neptune */
-    strcpy(planets[8].name, "Neptune");
-    planets[8].mass = 1.024e26;
-    r_neptune = 30.069 * AU;
-    planets[8].position = V_init(r_neptune, 0.0, 0.0);
-    planets[8].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_neptune), 0.0);
+        /* Saturn */
+        strcpy(planets[6].name, "Saturn");
+        planets[6].mass = 5.683e26;
+        r_saturn = 9.537 * AU;
+        planets[6].position = V_init(r_saturn, 0.0, 0.0);
+        planets[6].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_saturn), 0.0);
 
-    /* Pluto */
-    strcpy(planets[9].name, "Pluto");
-    planets[9].mass = 1.303e22;
-    r_pluto = 39.482 * AU;
-    planets[9].position = V_init(r_pluto, 0.0, 0.0);
-    planets[9].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_pluto), 0.0);
+        /* Uranus */
+        strcpy(planets[7].name, "Uranus");
+        planets[7].mass = 8.681e25;
+        r_uranus = 19.191 * AU;
+        planets[7].position = V_init(r_uranus, 0.0, 0.0);
+        planets[7].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_uranus), 0.0);
 
-    /* Initialize accelerations to zero */
+        /* Neptune */
+        strcpy(planets[8].name, "Neptune");
+        planets[8].mass = 1.024e26;
+        r_neptune = 30.069 * AU;
+        planets[8].position = V_init(r_neptune, 0.0, 0.0);
+        planets[8].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_neptune), 0.0);
+
+        /* Pluto */
+        strcpy(planets[9].name, "Pluto");
+        planets[9].mass = 1.303e22;
+        r_pluto = 39.482 * AU;
+        planets[9].position = V_init(r_pluto, 0.0, 0.0);
+        planets[9].velocity = V_init(0.0, sqrt(G_CONST * planets[0].mass / r_pluto), 0.0);
+    }
+
+    /* Initialize accelerations to zero for all planets, regardless of loading method */
     for (i = 0; i < NUM_BODIES; ++i) {
         planets[i].acceleration = V_init(0.0, 0.0, 0.0);
     }
@@ -365,11 +441,13 @@ int main() {
     int step;
     double current_time_days;
     int i;
+    char planet_data_filename[] = "planets.dat"; /* Default data file name */
+    /* To force use of hardcoded defaults, you could use: */
+    /* char* planet_data_filename = NULL; */
+    /* Or an empty string: char planet_data_filename[] = ""; */
 
     /* (1) Intake starting positions (and other properties) */
-    /* The function below uses hardcoded values. Modify it to read from a file */
-    /* or prompt the user for data corresponding to a specific date and time. */
-    initialize_solar_system(solar_system);
+    initialize_solar_system(solar_system, planet_data_filename);
 
     /* Simulation parameters */
     time_step_seconds = 1.0 * DAY_S;       /* Time step (e.g., 1 day) */
