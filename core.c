@@ -153,6 +153,44 @@ int read_planet_data_from_file(filename, planets_out, max_planets_to_read)
     return planets_read_count;
 }
 
+/* --- File Writing Function --- */
+/*
+ * Writes planet orbital data to a specified file.
+ * Overwrites the file if it exists, or creates it if it does not.
+ * File format per planet (values separated by newlines):
+ *   PlanetName
+ *   Mass_kg
+ *   PositionX_m PositionY_m PositionZ_m
+ *   VelocityX_mps VelocityY_mps VelocityZ_mps
+ *
+ * Returns 0 on success.
+ * Returns -1 if the file cannot be opened for writing.
+ */
+int write_planet_data_to_file(filename, planets, num_planets_to_write)
+    char filename[];
+    Planet planets[];
+    int num_planets_to_write;
+{
+    FILE *fp;
+    int i;
+
+    fp = fopen(filename, "w");
+    if (fp == NULL) {
+        fprintf(stderr, "Error: Could not open planet data file '%s' for writing.\n", filename);
+        return -1; /* Indicate file open error */
+    }
+
+    for (i = 0; i < num_planets_to_write; ++i) {
+        fprintf(fp, "%s\n", planets[i].name);
+        fprintf(fp, "%e\n", planets[i].mass); /* Use %e for scientific notation for mass */
+        fprintf(fp, "%.1f %.1f %.1f\n", planets[i].position.x, planets[i].position.y, planets[i].position.z);
+        fprintf(fp, "%.2f %.2f %.2f\n", planets[i].velocity.x, planets[i].velocity.y, planets[i].velocity.z);
+    }
+
+    fclose(fp);
+    return 0; /* Success */
+}
+
 /* --- Initialization --- */
 /* This function sets up the initial state of the solar system. */
 /* It will attempt to load data from data_filename if provided. */
@@ -493,6 +531,12 @@ int main() {
             printf("\n");
         }
     }
+
+    /* (3) Write final state back to file */
+    printf("\nWriting final planet states to %s...\n", planet_data_filename);
+    if (write_planet_data_to_file(planet_data_filename, solar_system, NUM_BODIES) == 0) {
+        printf("Successfully wrote final states.\n");
+    } /* Error message handled by write_planet_data_to_file */
 
     printf("Simulation finished.\n");
     return 0;
