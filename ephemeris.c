@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h> /* For strcpy in main example */
+#include <time.h>   /* For time(), localtime() */
 
 /* Constants */
 #define PI 3.14159265358979323846
@@ -126,8 +127,8 @@ double second;
 
     day_fraction = (hour + minute / 60.0 + second / 3600.0) / 24.0;
 
-    jd = (int)(365.25 * (year + 4716.0)) +
-         (int)(30.6001 * (month + 1.0)) +
+    jd = (long int)(365.25 * (year + 4716.0)) +   /* Use long int for large terms */
+         (long int)(30.6001 * (month + 1.0)) +  /* Use long int for large terms */
          day + b - 1524.5 + day_fraction;
 
     return jd;
@@ -376,16 +377,19 @@ int *num_planets;
 /* Example Usage */
 
 int main() {
-    OrbitalElements earth_elements, mars_elements;
-    PlanetEphem earth_ephem, mars_ephem_helio, mars_ephem_geo;
+    /* K&R C: All declarations at the top of the block */
     OrbitalElements all_planets[MAX_PLANETS];
+    PlanetEphem current_planet_ephem; /* Buffer for ephemeris calculation */
     int num_planets_loaded;
     int i;
-    int earth_idx = -1, mars_idx = -1;
 
     double jd;
     int year, month, day;
     double hour, minute, second;
+
+    time_t time_now;
+    struct tm *local_time_now;
+
 
     /* Initialize orbital elements from file */
     if (!initialize_orbital_elements_from_file("ephemeris_data.txt", all_planets, &num_planets_loaded)) {
@@ -394,60 +398,37 @@ int main() {
     }
     printf("Loaded %d planets from file.\n\n", num_planets_loaded);
 
-    /* Find Earth and Mars in the loaded data */
-    /* Note: "EMBary" is Earth-Moon Barycenter, often used for Earth's orbit */
-    for (i = 0; i < num_planets_loaded; i++) {
-        if (strcmp(all_planets[i].name, "EMBary") == 0) {
-            earth_idx = i;
-        } else if (strcmp(all_planets[i].name, "Mars") == 0) {
-            mars_idx = i;
-        }
-    }
+    /* Get current system time */
+    time_now = time(NULL);
+    local_time_now = localtime(&time_now);
 
-    if (earth_idx == -1) {
-        fprintf(stderr, "Earth (EMBary) data not found in file.\n");
-        return 1;
-    }
-    if (mars_idx == -1) {
-        fprintf(stderr, "Mars data not found in file.\n");
-        return 1;
-    }
-
-    earth_elements = all_planets[earth_idx];
-    mars_elements = all_planets[mars_idx];
-
-    /* Date: 2023-10-27 00:00:00 UT */
-    year = 2023; month = 10; day = 27;
-    hour = 0.0; minute = 0.0; second = 0.0;
+    /* Extract date and time components */
+    /* struct tm members: tm_year (years since 1900), tm_mon (0-11), tm_mday (1-31) */
+    /* tm_hour (0-23), tm_min (0-59), tm_sec (0-59) */
+    year   = local_time_now->tm_year + 1900;
+    month  = local_time_now->tm_mon + 1;
+    day    = local_time_now->tm_mday;
+    hour   = (double)local_time_now->tm_hour;
+    minute = (double)local_time_now->tm_min;
+    second = (double)local_time_now->tm_sec;
 
     jd = calculate_julian_day(year, month, day, hour, minute, second);
-    printf("Julian Day for %d-%02d-%02d %.2f:%.2f:%.2f UT is %.5f\n",
-           year, month, day, hour, minute, second, jd);
-    printf("--------------------------------------------------\n\n");
 
-    /* Calculate Earth's heliocentric position */
-    calculate_planet_helio_ecliptic_coords(earth_elements, jd, &earth_ephem);
-    printf("%s Heliocentric Ecliptic Coordinates (J2000.0):\n", earth_elements.name);
-    printf("  X: %.6f AU\n", earth_ephem.x_h_ecl);
-    printf("  Y: %.6f AU\n", earth_ephem.y_h_ecl);
-    printf("  Z: %.6f AU\n\n", earth_ephem.z_h_ecl);
+    printf("Calculating for current date and time: %d-%02d-%02d %02.0f:%02.0f:%02.0f UT\n",
+           year, month, day, hour, minute, second);
+    printf("Julian Day: %.5f\n", jd);
+    printf("-----------------------------------------------------------------------\n");
+    printf("Heliocentric Ecliptic Coordinates (J2000.0):\n");
 
-    /* Calculate Mars' heliocentric position */
-    calculate_planet_helio_ecliptic_coords(mars_elements, jd, &mars_ephem_helio);
-    printf("%s Heliocentric Ecliptic Coordinates (J2000.0):\n", mars_elements.name);
-    printf("  X: %.6f AU\n", mars_ephem_helio.x_h_ecl);
-    printf("  Y: %.6f AU\n", mars_ephem_helio.y_h_ecl);
-    printf("  Z: %.6f AU\n\n", mars_ephem_helio.z_h_ecl);
-
-    /* Calculate Mars' geocentric position */
-    calculate_geocentric_ecliptic_coords(mars_ephem_helio, earth_ephem, &mars_ephem_geo);
-    printf("%s Geocentric Ecliptic Coordinates (J2000.0):\n", mars_elements.name);
-    printf("  Rectangular X: %.6f AU\n", mars_ephem_geo.x_g_ecl);
-    printf("  Rectangular Y: %.6f AU\n", mars_ephem_geo.y_g_ecl);
-    printf("  Rectangular Z: %.6f AU\n", mars_ephem_geo.z_g_ecl);
-    printf("  Ecliptic Longitude (lambda): %.4f deg\n", mars_ephem_geo.lambda_g_deg);
-    printf("  Ecliptic Latitude (beta):  %.4f deg\n", mars_ephem_geo.beta_g_deg);
-    printf("  Distance (delta):          %.6f AU\n", mars_ephem_geo.delta_g_au);
+    /* Loop through each loaded planet and calculate its heliocentric position */
+    for (i = 0; i < num_planets_loaded; i++) {
+        calculate_planet_helio_ecliptic_coords(all_planets[i], jd, &current_planet_ephem);
+        printf("  %-10s: X: %9.6f AU, Y: %9.6f AU, Z: %9.6f AU\n",
+               all_planets[i].name,
+               current_planet_ephem.x_h_ecl,
+               current_planet_ephem.y_h_ecl,
+               current_planet_ephem.z_h_ecl);
+    }
 
     return 0;
 }
