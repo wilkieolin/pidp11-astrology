@@ -62,6 +62,14 @@ typedef struct {
     double delta_g_au;   /* Distance from Earth (AU) */
 } PlanetEphem;
 
+/* Structure to hold apparent Azimuth and Altitude */
+typedef struct {
+    char name[32];       /* Name of the target body */
+    double azimuth_deg;  /* Calculated Azimuth in degrees */
+    double altitude_deg; /* Calculated Altitude in degrees */
+    int is_valid;        /* TRUE if this entry contains valid Az/Alt data */
+} ApparentSkyPosition;
+
 
 /* Function Prototypes (K&R C style) */
 double calculate_julian_day();
@@ -71,14 +79,20 @@ double solve_kepler_equation();
 void calculate_planet_helio_ecliptic_coords();
 void calculate_geocentric_ecliptic_coords();
 int initialize_orbital_elements_from_file(/* char *filename, OrbitalElements elements[], int *num_planets */);
-void print_apparent_az_alt_all_planets(
+void calculate_apparent_az_alt_all_planets(
     /* OrbitalElements orbital_elements_list[], */
     /* PlanetEphem all_planet_ephems[], */
     /* int num_planets, */
     /* int observer_planet_idx, */
     /* double observer_latitude_deg, */
     /* double observer_longitude_deg, */
-    /* double jd */);
+    /* double jd, */
+    /* ApparentSkyPosition apparent_positions[] */);
+void print_relative_angular_separations(
+    /* ApparentSkyPosition apparent_positions[], */
+    /* int num_planets, */
+    /* OrbitalElements orbital_elements_list[], */
+    /* int observer_planet_idx */);
 
 /*
  * my_fmod
@@ -386,9 +400,10 @@ int *num_planets;
 /* ... (other definitions and functions) ... */
 
 /*
- * print_apparent_az_alt_all_planets
- * Calculates and prints the apparent Azimuth and Altitude of all other celestial bodies
+ * calculate_apparent_az_alt_all_planets
+ * Calculates the apparent Azimuth and Altitude of all other celestial bodies
  * as seen by an observer on a specified planet, given their heliocentric ecliptic coordinates.
+ * The results are stored in the 'apparent_positions' array.
  *
  * orbital_elements_list: Array of OrbitalElements (for names).
  * all_planet_ephems: Array of PlanetEphem structures, containing current
@@ -398,15 +413,17 @@ int *num_planets;
  * observer_latitude_deg: Observer's latitude on the planet (-90 to +90 degrees).
  * observer_longitude_deg: Observer's longitude on the planet (0 to 360, or -180 to 180 degrees).
  * jd: Julian Day of the observation.
+ * apparent_positions: Output array to store calculated Az/Alt and names.
  */
-void print_apparent_az_alt_all_planets(
+void calculate_apparent_az_alt_all_planets(
     orbital_elements_list,
     all_planet_ephems,
     num_planets,
     observer_planet_idx,
     observer_latitude_deg,
     observer_longitude_deg,
-    jd)
+    jd,
+    apparent_positions)
     OrbitalElements orbital_elements_list[];
     PlanetEphem all_planet_ephems[]; /* Input: heliocentric ecliptic coords */
     int num_planets;
@@ -414,6 +431,7 @@ void print_apparent_az_alt_all_planets(
     double observer_latitude_deg;
     double observer_longitude_deg;
     double jd;
+    ApparentSkyPosition apparent_positions[]; /* Output array */
 {
     /* K&R C: All variable declarations at the top */
     PlanetEphem observer_helio_coords;
@@ -423,7 +441,7 @@ void print_apparent_az_alt_all_planets(
     double epsilon_rad; /* Obliquity of the ecliptic */
     double T_cent;      /* Julian centuries since J2000 for GMST calculation */
     double gmst_deg;    /* Greenwich Mean Sidereal Time in degrees */
-    double lst_deg;     /* Local Sidereal Time in degrees */
+    double lst_deg;     /* Local Sidereal Time in degrees */ /* K&R: variables must be declared at top */
     double lst_rad;
     int target_idx;
 
@@ -441,17 +459,19 @@ void print_apparent_az_alt_all_planets(
     double cos_delta, sin_delta;
     double cos_H, sin_H;
 
-
     if (observer_planet_idx < 0 || observer_planet_idx >= num_planets) {
-        fprintf(stderr, "Error (print_apparent_az_alt): Invalid observer_planet_idx.\n");
+        fprintf(stderr, "Error (calculate_apparent_az_alt): Invalid observer_planet_idx.\n");
         return;
     }
 
-    printf("\nApparent Azimuth/Altitude from %s (Lat: %.2f, Lon: %.2f) at JD %.5f:\n",
-           orbital_elements_list[observer_planet_idx].name,
-           observer_latitude_deg, observer_longitude_deg, jd);
-    printf("  Target        Azimuth (N=0,E=90)   Altitude\n");
-    printf("  ------------- -------------------- --------------------\n");
+    /* Initialize output array */
+    for (target_idx = 0; target_idx < num_planets; ++target_idx) {
+        apparent_positions[target_idx].is_valid = FALSE;
+        strcpy(apparent_positions[target_idx].name, "");
+        apparent_positions[target_idx].azimuth_deg = 0.0;
+        apparent_positions[target_idx].altitude_deg = 0.0;
+    }
+
 
     observer_helio_coords = all_planet_ephems[observer_planet_idx];
     obs_lat_rad = observer_latitude_deg * DEG_TO_RAD;
@@ -472,6 +492,7 @@ void print_apparent_az_alt_all_planets(
 
     for (target_idx = 0; target_idx < num_planets; ++target_idx) {
         if (target_idx == observer_planet_idx) {
+            apparent_positions[target_idx].is_valid = FALSE; /* Mark observer as invalid for Az/Alt to self */
             continue; /* Skip observer's own planet */
         }
 
@@ -518,11 +539,74 @@ void print_apparent_az_alt_all_planets(
         az_rad = atan2(az_y_term, az_x_term);
         az_deg = normalize_angle_deg(az_rad * RAD_TO_DEG);
 
-        printf("  %-13s Az: %6.2f deg, Alt: %6.2f deg\n",
-               orbital_elements_list[target_idx].name, az_deg, alt_deg);
+        /* Store results in the output array */
+        strcpy(apparent_positions[target_idx].name, orbital_elements_list[target_idx].name);
+        apparent_positions[target_idx].azimuth_deg = az_deg;
+        apparent_positions[target_idx].altitude_deg = alt_deg;
+        apparent_positions[target_idx].is_valid = TRUE;
     }
 }
 
+/*
+ * print_relative_angular_separations
+ * Calculates and prints the angular separation between each pair of celestial bodies
+ * based on their apparent Azimuth and Altitude from an observer's perspective.
+ *
+ * apparent_positions: Array of ApparentSkyPosition structures, populated by
+ *                     calculate_apparent_az_alt_all_planets.
+ * num_planets: Total number of celestial bodies.
+ * orbital_elements_list: Array of OrbitalElements (for observer's name).
+ * observer_planet_idx: Index of the planet where the observer is located.
+ */
+void print_relative_angular_separations(
+    apparent_positions,
+    num_planets,
+    orbital_elements_list,
+    observer_planet_idx)
+    ApparentSkyPosition apparent_positions[];
+    int num_planets;
+    OrbitalElements orbital_elements_list[];
+    int observer_planet_idx;
+{
+    int i, j;
+    double az1_rad, alt1_rad, az2_rad, alt2_rad;
+    double cos_angle, angle_rad, angle_deg;
+
+    if (observer_planet_idx < 0 || observer_planet_idx >= num_planets) {
+        fprintf(stderr, "Error (print_relative_angular_separations): Invalid observer_planet_idx.\n");
+        return;
+    }
+
+    printf("\nRelative angular separations as seen from %s:\n", orbital_elements_list[observer_planet_idx].name);
+    printf("  Planet 1      Planet 2      Separation (deg)\n");
+    printf("  ------------- ------------- ------------------\n");
+
+    for (i = 0; i < num_planets; ++i) {
+        if (!apparent_positions[i].is_valid) continue;
+
+        for (j = i + 1; j < num_planets; ++j) {
+            if (!apparent_positions[j].is_valid) continue;
+
+            alt1_rad = apparent_positions[i].altitude_deg * DEG_TO_RAD;
+            az1_rad  = apparent_positions[i].azimuth_deg  * DEG_TO_RAD;
+            alt2_rad = apparent_positions[j].altitude_deg * DEG_TO_RAD;
+            az2_rad  = apparent_positions[j].azimuth_deg  * DEG_TO_RAD;
+
+            cos_angle = sin(alt1_rad) * sin(alt2_rad) +
+                        cos(alt1_rad) * cos(alt2_rad) * cos(az1_rad - az2_rad);
+
+            /* Clamp cos_angle to [-1, 1] to avoid domain errors with acos due to precision issues */
+            if (cos_angle > 1.0) cos_angle = 1.0;
+            if (cos_angle < -1.0) cos_angle = -1.0;
+
+            angle_rad = acos(cos_angle);
+            angle_deg = angle_rad * RAD_TO_DEG;
+
+            printf("  %-13s %-13s %6.2f\n",
+                   apparent_positions[i].name, apparent_positions[j].name, angle_deg);
+        }
+    }
+}
 
 /* Example Usage */
 
@@ -530,6 +614,7 @@ int main() {
     /* K&R C: All declarations at the top of the block */
     OrbitalElements all_planets[MAX_PLANETS];
     PlanetEphem all_planet_ephems_data[MAX_PLANETS]; /* Store all heliocentric ephems */
+    ApparentSkyPosition apparent_sky_pos[MAX_PLANETS]; /* Store Az/Alt for observer */
     int num_planets_loaded;
     int i;
 
@@ -541,9 +626,9 @@ int main() {
     struct tm *local_time_now;
 
     /* Observer details for Az/Alt calculation (example: Greenwich for Earth) */
-    int earth_observer_idx = 2; /* Assuming Earth (EMB) is 4th in list (idx 3) after Sun,Merc,Ven */
-    double observer_lat = 41.77810;  /* Latitude of Greenwich, UK */
-    double observer_lon = -88.08260;      /* Longitude of Greenwich, UK */
+    int earth_observer_idx = 2; /* EMBary is 3rd in ephemeris_data.txt (index 2) */
+    double observer_lat = 41.77810;  /* Latitude of Naperville, IL (example) */
+    double observer_lon = -88.08260; /* Longitude of Naperville, IL (example) */
 
     
     /* Initialize orbital elements from file */
@@ -588,13 +673,30 @@ int main() {
     /*
      * Example: Calculate and print apparent Azimuth/Altitude for all planets
      * as seen from Earth (assuming Earth is at index earth_observer_idx).
-     * Make sure earth_observer_idx is correct for your ephemeris_data.txt file.
-     * Sun=0, Mercury=1, Venus=2, Earth_Moon_Barycenter=3, Mars=4 etc. is common.
      */
     if (earth_observer_idx >= 0 && earth_observer_idx < num_planets_loaded) {
-        print_apparent_az_alt_all_planets(all_planets, all_planet_ephems_data,
-                                          num_planets_loaded, earth_observer_idx,
-                                          observer_lat, observer_lon, jd);
+        calculate_apparent_az_alt_all_planets(all_planets, all_planet_ephems_data,
+                                              num_planets_loaded, earth_observer_idx,
+                                              observer_lat, observer_lon, jd,
+                                              apparent_sky_pos);
+
+        /* Optional: Print the calculated Az/Alt values */
+        printf("\nApparent Azimuth/Altitude from %s (Lat: %.2f, Lon: %.2f) at JD %.5f:\n",
+               all_planets[earth_observer_idx].name,
+               observer_lat, observer_lon, jd);
+        printf("  Target        Azimuth (N=0,E=90)   Altitude\n");
+        printf("  ------------- -------------------- --------------------\n");
+        for (i = 0; i < num_planets_loaded; i++) {
+            if (apparent_sky_pos[i].is_valid) {
+                printf("  %-13s Az: %6.2f deg, Alt: %6.2f deg\n",
+                       apparent_sky_pos[i].name,
+                       apparent_sky_pos[i].azimuth_deg,
+                       apparent_sky_pos[i].altitude_deg);
+            }
+        }
+
+        print_relative_angular_separations(apparent_sky_pos, num_planets_loaded,
+                                           all_planets, earth_observer_idx);
     }
 
     return 0;
