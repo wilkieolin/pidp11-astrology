@@ -71,6 +71,14 @@ double solve_kepler_equation();
 void calculate_planet_helio_ecliptic_coords();
 void calculate_geocentric_ecliptic_coords();
 int initialize_orbital_elements_from_file(/* char *filename, OrbitalElements elements[], int *num_planets */);
+void print_apparent_az_alt_all_planets(
+    /* OrbitalElements orbital_elements_list[], */
+    /* PlanetEphem all_planet_ephems[], */
+    /* int num_planets, */
+    /* int observer_planet_idx, */
+    /* double observer_latitude_deg, */
+    /* double observer_longitude_deg, */
+    /* double jd */);
 
 /*
  * my_fmod
@@ -372,6 +380,148 @@ int *num_planets;
     return TRUE;
 }
 
+/* Added constant for J2000.0 obliquity of the ecliptic */
+#define EPSILON_J2000_DEG 23.4392911 /* Obliquity of the ecliptic in degrees at J2000.0 */
+
+/* ... (other definitions and functions) ... */
+
+/*
+ * print_apparent_az_alt_all_planets
+ * Calculates and prints the apparent Azimuth and Altitude of all other celestial bodies
+ * as seen by an observer on a specified planet, given their heliocentric ecliptic coordinates.
+ *
+ * orbital_elements_list: Array of OrbitalElements (for names).
+ * all_planet_ephems: Array of PlanetEphem structures, containing current
+ *                    HELIOCENTRIC ecliptic coordinates (x_h_ecl, y_h_ecl, z_h_ecl) for all bodies.
+ * num_planets: Total number of celestial bodies.
+ * observer_planet_idx: Index of the planet where the observer is located.
+ * observer_latitude_deg: Observer's latitude on the planet (-90 to +90 degrees).
+ * observer_longitude_deg: Observer's longitude on the planet (0 to 360, or -180 to 180 degrees).
+ * jd: Julian Day of the observation.
+ */
+void print_apparent_az_alt_all_planets(
+    orbital_elements_list,
+    all_planet_ephems,
+    num_planets,
+    observer_planet_idx,
+    observer_latitude_deg,
+    observer_longitude_deg,
+    jd)
+    OrbitalElements orbital_elements_list[];
+    PlanetEphem all_planet_ephems[]; /* Input: heliocentric ecliptic coords */
+    int num_planets;
+    int observer_planet_idx;
+    double observer_latitude_deg;
+    double observer_longitude_deg;
+    double jd;
+{
+    /* K&R C: All variable declarations at the top */
+    PlanetEphem observer_helio_coords;
+    PlanetEphem target_helio_coords;
+    PlanetEphem target_coords_relative_to_observer; /* Stores geocentric ecliptic relative to observer */
+    double obs_lat_rad;
+    double epsilon_rad; /* Obliquity of the ecliptic */
+    double T_cent;      /* Julian centuries since J2000 for GMST calculation */
+    double gmst_deg;    /* Greenwich Mean Sidereal Time in degrees */
+    double lst_deg;     /* Local Sidereal Time in degrees */
+    double lst_rad;
+    int target_idx;
+
+    /* Variables for coordinate transformation for each target */
+    double x_rel_ecl, y_rel_ecl, z_rel_ecl; /* Relative ecliptic rectangular */
+    double x_eq, y_eq, z_eq;                /* Relative equatorial rectangular */
+    double alpha_rad;                       /* Right Ascension */
+    double delta_rad;                       /* Declination */
+    double H_rad;                           /* Hour Angle */
+    double sin_alt, alt_rad, alt_deg;
+    double az_y_term, az_x_term, az_rad, az_deg;
+    double cos_epsilon, sin_epsilon;
+    double dist_eq_proj; /* Projection of distance onto equatorial plane */
+    double cos_obs_lat, sin_obs_lat;
+    double cos_delta, sin_delta;
+    double cos_H, sin_H;
+
+
+    if (observer_planet_idx < 0 || observer_planet_idx >= num_planets) {
+        fprintf(stderr, "Error (print_apparent_az_alt): Invalid observer_planet_idx.\n");
+        return;
+    }
+
+    printf("\nApparent Azimuth/Altitude from %s (Lat: %.2f, Lon: %.2f) at JD %.5f:\n",
+           orbital_elements_list[observer_planet_idx].name,
+           observer_latitude_deg, observer_longitude_deg, jd);
+    printf("  Target        Azimuth (N=0,E=90)   Altitude\n");
+    printf("  ------------- -------------------- --------------------\n");
+
+    observer_helio_coords = all_planet_ephems[observer_planet_idx];
+    obs_lat_rad = observer_latitude_deg * DEG_TO_RAD;
+    epsilon_rad = EPSILON_J2000_DEG * DEG_TO_RAD;
+
+    cos_epsilon = cos(epsilon_rad);
+    sin_epsilon = sin(epsilon_rad);
+    cos_obs_lat = cos(obs_lat_rad);
+    sin_obs_lat = sin(obs_lat_rad);
+
+    /* Calculate Local Sidereal Time (LST) */
+    T_cent = (jd - JD_J2000) / DAYS_PER_CENTURY;
+    gmst_deg = 280.46061837 + 360.98564736629 * (jd - JD_J2000) +
+               0.000387933 * T_cent * T_cent - (T_cent * T_cent * T_cent) / 38710000.0;
+    gmst_deg = normalize_angle_deg(gmst_deg);
+    lst_deg = normalize_angle_deg(gmst_deg + observer_longitude_deg);
+    lst_rad = lst_deg * DEG_TO_RAD;
+
+    for (target_idx = 0; target_idx < num_planets; ++target_idx) {
+        if (target_idx == observer_planet_idx) {
+            continue; /* Skip observer's own planet */
+        }
+
+        target_helio_coords = all_planet_ephems[target_idx];
+
+        /* Get geocentric ecliptic coordinates of target relative to observer */
+        /* calculate_geocentric_ecliptic_coords expects first two args by value */
+        calculate_geocentric_ecliptic_coords(target_helio_coords, observer_helio_coords,
+                                             &target_coords_relative_to_observer);
+
+        x_rel_ecl = target_coords_relative_to_observer.x_g_ecl;
+        y_rel_ecl = target_coords_relative_to_observer.y_g_ecl;
+        z_rel_ecl = target_coords_relative_to_observer.z_g_ecl;
+
+        /* 1. Transform geocentric ecliptic (relative) to geocentric equatorial (relative) */
+        x_eq = x_rel_ecl;
+        y_eq = y_rel_ecl * cos_epsilon - z_rel_ecl * sin_epsilon;
+        z_eq = y_rel_ecl * sin_epsilon + z_rel_ecl * cos_epsilon;
+
+        /* 2. Calculate Right Ascension (alpha) and Declination (delta) */
+        alpha_rad = atan2(y_eq, x_eq);
+        dist_eq_proj = sqrt(x_eq * x_eq + y_eq * y_eq);
+        delta_rad = atan2(z_eq, dist_eq_proj); /* More robust than asin for delta */
+
+        /* 3. Calculate Hour Angle (H) */
+        H_rad = lst_rad - alpha_rad;
+
+        /* Pre-calculate sines and cosines for efficiency and clarity */
+        cos_delta = cos(delta_rad);
+        sin_delta = sin(delta_rad);
+        cos_H = cos(H_rad);
+        sin_H = sin(H_rad);
+
+        /* 4. Transform equatorial (RA/Dec/H) to horizontal (Azimuth/Altitude) */
+        /* Altitude calculation */
+        sin_alt = sin_obs_lat * sin_delta + cos_obs_lat * cos_delta * cos_H;
+        alt_rad = asin(sin_alt); /* asin range is -PI/2 to PI/2, correct for altitude */
+        alt_deg = alt_rad * RAD_TO_DEG;
+
+        /* Azimuth calculation (Az=0 North, positive Eastward) */
+        /* Az = atan2(-cos(Dec)sin(H), sin(Dec)cos(Lat) - cos(Dec)sin(Lat)cos(H)) */
+        az_y_term = -cos_delta * sin_H;
+        az_x_term = sin_delta * cos_obs_lat - cos_delta * sin_obs_lat * cos_H;
+        az_rad = atan2(az_y_term, az_x_term);
+        az_deg = normalize_angle_deg(az_rad * RAD_TO_DEG);
+
+        printf("  %-13s Az: %6.2f deg, Alt: %6.2f deg\n",
+               orbital_elements_list[target_idx].name, az_deg, alt_deg);
+    }
+}
 
 
 /* Example Usage */
@@ -379,7 +529,7 @@ int *num_planets;
 int main() {
     /* K&R C: All declarations at the top of the block */
     OrbitalElements all_planets[MAX_PLANETS];
-    PlanetEphem current_planet_ephem; /* Buffer for ephemeris calculation */
+    PlanetEphem all_planet_ephems_data[MAX_PLANETS]; /* Store all heliocentric ephems */
     int num_planets_loaded;
     int i;
 
@@ -390,7 +540,12 @@ int main() {
     time_t time_now;
     struct tm *local_time_now;
 
+    /* Observer details for Az/Alt calculation (example: Greenwich for Earth) */
+    int earth_observer_idx = 2; /* Assuming Earth (EMB) is 4th in list (idx 3) after Sun,Merc,Ven */
+    double observer_lat = 41.77810;  /* Latitude of Greenwich, UK */
+    double observer_lon = -88.08260;      /* Longitude of Greenwich, UK */
 
+    
     /* Initialize orbital elements from file */
     if (!initialize_orbital_elements_from_file("ephemeris_data.txt", all_planets, &num_planets_loaded)) {
         fprintf(stderr, "Failed to load ephemeris data.\n");
@@ -422,12 +577,24 @@ int main() {
 
     /* Loop through each loaded planet and calculate its heliocentric position */
     for (i = 0; i < num_planets_loaded; i++) {
-        calculate_planet_helio_ecliptic_coords(all_planets[i], jd, &current_planet_ephem);
+        calculate_planet_helio_ecliptic_coords(all_planets[i], jd, &all_planet_ephems_data[i]);
         printf("  %-10s: X: %9.6f AU, Y: %9.6f AU, Z: %9.6f AU\n",
                all_planets[i].name,
-               current_planet_ephem.x_h_ecl,
-               current_planet_ephem.y_h_ecl,
-               current_planet_ephem.z_h_ecl);
+               all_planet_ephems_data[i].x_h_ecl,
+               all_planet_ephems_data[i].y_h_ecl,
+               all_planet_ephems_data[i].z_h_ecl);
+    }
+
+    /*
+     * Example: Calculate and print apparent Azimuth/Altitude for all planets
+     * as seen from Earth (assuming Earth is at index earth_observer_idx).
+     * Make sure earth_observer_idx is correct for your ephemeris_data.txt file.
+     * Sun=0, Mercury=1, Venus=2, Earth_Moon_Barycenter=3, Mars=4 etc. is common.
+     */
+    if (earth_observer_idx >= 0 && earth_observer_idx < num_planets_loaded) {
+        print_apparent_az_alt_all_planets(all_planets, all_planet_ephems_data,
+                                          num_planets_loaded, earth_observer_idx,
+                                          observer_lat, observer_lon, jd);
     }
 
     return 0;
