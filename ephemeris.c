@@ -93,6 +93,10 @@ void print_relative_angular_separations(
     /* int num_planets, */
     /* OrbitalElements orbital_elements_list[], */
     /* int observer_planet_idx */);
+void print_helio_ecliptic_angular_separations(
+    /* OrbitalElements orbital_elements_list[], */
+    /* PlanetEphem all_planet_ephems[], */
+    /* int observer_planet_idx */);
 
 /*
  * my_fmod
@@ -608,6 +612,60 @@ void print_relative_angular_separations(
     }
 }
 
+/*
+ * print_helio_ecliptic_angular_separations
+ * Calculates and prints the angular separation on the ecliptic plane between
+ * each pair of planets, as viewed from the Sun (heliocentric perspective).
+ *
+ * orbital_elements_list: Array of OrbitalElements (for names).
+ * all_planet_ephems: Array of PlanetEphem structures, containing current
+ *                    HELIOCENTRIC ecliptic coordinates (x_h_ecl, y_h_ecl) for all bodies.
+ * num_planets: Total number of celestial bodies.
+ */
+void print_helio_ecliptic_angular_separations(
+    orbital_elements_list,
+    all_planet_ephems,
+    num_planets)
+    OrbitalElements orbital_elements_list[];
+    PlanetEphem all_planet_ephems[];
+    int num_planets;
+{
+    /* K&R C: All variable declarations at the top */
+    double helio_ecl_lon_deg[MAX_PLANETS]; /* Store heliocentric ecliptic longitude for each planet */
+    int i, j;
+    double lon_rad;
+    double angle_diff_deg;
+
+    if (num_planets <= 1) {
+        printf("\nNot enough planets to calculate relative heliocentric ecliptic angles.\n");
+        return;
+    }
+
+    printf("\nHeliocentric Ecliptic Angular Separations (view from Sun):\n");
+    printf("  Planet 1      Planet 2      Separation (deg)\n");
+    printf("  ------------- ------------- ------------------\n");
+
+    /* Calculate heliocentric ecliptic longitude for each planet */
+    for (i = 0; i < num_planets; ++i) {
+        lon_rad = atan2(all_planet_ephems[i].y_h_ecl, all_planet_ephems[i].x_h_ecl);
+        helio_ecl_lon_deg[i] = normalize_angle_deg(lon_rad * RAD_TO_DEG);
+    }
+
+    /* Calculate and print angular separation between unique pairs */
+    for (i = 0; i < num_planets; ++i) {
+        for (j = i + 1; j < num_planets; ++j) {
+            angle_diff_deg = fabs(helio_ecl_lon_deg[j] - helio_ecl_lon_deg[i]); /* abs difference */
+            if (angle_diff_deg > 180.0) { /* Get shortest angle (0-180) */
+                angle_diff_deg = 360.0 - angle_diff_deg;
+            }
+            printf("  %-13s %-13s %6.2f\n",
+                   orbital_elements_list[i].name,
+                   orbital_elements_list[j].name,
+                   angle_diff_deg);
+        }
+    }
+}
+
 /* Example Usage */
 
 int main() {
@@ -698,6 +756,10 @@ int main() {
         print_relative_angular_separations(apparent_sky_pos, num_planets_loaded,
                                            all_planets, earth_observer_idx);
     }
+
+    /* Calculate and print heliocentric ecliptic angular separations */
+    print_helio_ecliptic_angular_separations(all_planets, all_planet_ephems_data,
+                                             num_planets_loaded);
 
     return 0;
 }
