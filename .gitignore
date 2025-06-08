@@ -2,3 +2,4 @@ core
 core.dSYM/*
 .vscode
 *.out
+glove.6B
