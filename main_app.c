@@ -3,6 +3,8 @@
 #include <math.h>           /* For cos, sin, atan2 */
 #include <time.h>           /* For time(), localtime() if not using user input */
 #include "ephemeris.h"      /* For ephemeris calculations */
+#include <string.h>        /* For strlen */
+#include <float.h>         /* For DBL_MAX */
 #include "aphorism_utils.h" /* For aphorism generation */
 
 /*
@@ -98,6 +100,77 @@ int generate_astrological_seeds(input_vector, output_seeds)
     return 1; /* Success */
 }
 
+/*
+ * select_templates_for_signs
+ * Selects an aphorism template for each of the 12 astrological signs/seeds.
+ * For each seed, it identifies the template (from the total available pool)
+ * whose original index is closest to (seed_value * num_total_templates).
+ * Templates are selected without replacement.
+ *
+ * astrological_seeds: Array of 12 double values (0.0 to 1.0).
+ * num_total_templates: The total number of unique aphorism templates available.
+ * selected_template_indices_out: Array to store the original indices of the
+ *                                selected template for each of the 12 seeds.
+ *                                If a template cannot be assigned (e.g., fewer
+ *                                than 12 templates available), -1 is stored.
+ * Returns the number of seeds for which a template was successfully assigned.
+ */
+int select_templates_for_signs(astrological_seeds, num_total_templates, selected_template_indices_out)
+    double astrological_seeds[]; /* Size 12 */
+    int num_total_templates;
+    int selected_template_indices_out[]; /* Size 12 */
+{
+    /* K&R C: All variable declarations at the top */
+    int is_template_used[MAX_TEMPLATES]; /* From aphorism_utils.h */
+    int i, j;
+    double ideal_target_float;
+    int best_original_idx;
+    double min_abs_diff;
+    double current_abs_diff;
+    int num_assigned;
+
+    if (num_total_templates > MAX_TEMPLATES) {
+        fprintf(stderr, "Error (select_templates_for_signs): num_total_templates (%d) exceeds MAX_TEMPLATES (%d).\n",
+                num_total_templates, MAX_TEMPLATES);
+        for (i = 0; i < 12; ++i) {
+            selected_template_indices_out[i] = -1;
+        }
+        return 0;
+    }
+    
+    for (j = 0; j < num_total_templates; ++j) {
+        is_template_used[j] = APH_FALSE; /* Use APH_FALSE from aphorism_utils.h */
+    }
+    for (i = 0; i < 12; ++i) { /* Initialize output array */
+        selected_template_indices_out[i] = -1;
+    }
+
+    num_assigned = 0;
+    for (i = 0; i < 12; ++i) { /* For each of the 12 seeds/signs */
+        ideal_target_float = astrological_seeds[i] * (double)num_total_templates;
+        
+        best_original_idx = -1;
+        min_abs_diff = DBL_MAX;
+
+        for (j = 0; j < num_total_templates; ++j) {
+            if (!is_template_used[j]) {
+                current_abs_diff = fabs((double)j - ideal_target_float);
+                if (current_abs_diff < min_abs_diff) {
+                    min_abs_diff = current_abs_diff;
+                    best_original_idx = j;
+                }
+            }
+        }
+
+        if (best_original_idx != -1) {
+            selected_template_indices_out[i] = best_original_idx;
+            is_template_used[best_original_idx] = APH_TRUE; /* Use APH_TRUE */
+            num_assigned++;
+        }
+    }
+    return num_assigned;
+}
+
 /* K&R C style main function */
 int main(argc, argv)
     int argc;
@@ -141,6 +214,8 @@ int main(argc, argv)
 
     double astrological_seeds[12]; /* For the new function's output */
     int m; /* Loop counter for printing seeds */
+    int selected_aphorism_indices[12]; /* For storing indices of selected templates */
+    int num_aphorisms_selected_for_signs;
 
     printf("Welcome to the K&R Astrology Program!\n");
 
@@ -289,29 +364,59 @@ int main(argc, argv)
                total_seps_in_vector);
     }
 
-
-    /* --- Initialize and use aphorism functions --- */
 aphorism_section: /* Label for goto if ephemeris part is skipped */
     printf("\nReading Aphorism Templates...\n");
     if (read_aphorism_templates("aphorism_templates.txt", aphorism_templates_storage, MAX_TEMPLATES, MAX_TEMPLATE_LEN, &num_tpls_read)) {
         if (num_tpls_read > 0) {
             printf("Successfully read %d aphorism templates.\n", num_tpls_read);
 
-            /* Example: Parse the first template */
-            parse_aphorism_template(aphorism_templates_storage[0], &n_count, &v_count, &nv_count);
-            printf("First template requires: N=%d, V=%d, NV=%d\n", n_count, v_count, nv_count);
+            /* Select aphorism templates for signs if seeds were also generated */
+            if (total_seps_in_vector >= 63) { /* Check if seeds were likely generated */
+                printf("\nSelecting aphorism templates for 12 signs...\n");
+                num_aphorisms_selected_for_signs = select_templates_for_signs(
+                    astrological_seeds,
+                    num_tpls_read,
+                    selected_aphorism_indices
+                );
+                printf("Selected %d aphorisms for the signs:\n", num_aphorisms_selected_for_signs);
+                for (m = 0; m < 12; ++m) {
+                    if (selected_aphorism_indices[m] != -1) {
+                        printf("  Sign %2d: Template #%2d (\"%.30s%s\")\n",
+                               m + 1,
+                               selected_aphorism_indices[m],
+                               aphorism_templates_storage[selected_aphorism_indices[m]],
+                               strlen(aphorism_templates_storage[selected_aphorism_indices[m]]) > 30 ? "..." : "");
+                    } else {
+                        printf("  Sign %2d: No template assigned.\n", m + 1);
+                    }
+                }
 
-            /* Example: Fill the first template */
-            if (fill_aphorism_template(aphorism_templates_storage[0],
-                                       test_nouns, sizeof(test_nouns)/sizeof(char*),
-                                       test_verbs, sizeof(test_verbs)/sizeof(char*),
-                                       test_nv, sizeof(test_nv)/sizeof(char*),
-                                       filled_aphorism, MAX_TEMPLATE_LEN)) {
-                printf("Generated Aphorism: %s\n", filled_aphorism);
+                /* Now, fill and print the selected aphorisms */
+                if (num_aphorisms_selected_for_signs > 0) {
+                    printf("\nGenerating aphorisms for the 12 signs:\n");
+                    for (m = 0; m < 12; ++m) {
+                        if (selected_aphorism_indices[m] != -1) {
+                            char* current_template_str = aphorism_templates_storage[selected_aphorism_indices[m]];
+                            printf("--- Sign %d (Template #%d) ---\n", m + 1, selected_aphorism_indices[m]);
+                            
+                            parse_aphorism_template(current_template_str, &n_count, &v_count, &nv_count);
+                            printf("  Requires: (N)=%d, (V)=%d, (NV)=%d\n", n_count, v_count, nv_count);
+
+                            if (fill_aphorism_template(current_template_str,
+                                                       test_nouns, sizeof(test_nouns)/sizeof(char*),
+                                                       test_verbs, sizeof(test_verbs)/sizeof(char*),
+                                                       test_nv, sizeof(test_nv)/sizeof(char*),
+                                                       filled_aphorism, MAX_TEMPLATE_LEN)) {
+                                printf("  Aphorism: %s\n\n", filled_aphorism);
+                            } else {
+                                printf("  Could not generate aphorism for sign %d.\n\n", m + 1);
+                            }
+                        } /* No else needed, already printed "No template assigned" above */
+                    }
+                }
             } else {
-                printf("Could not generate aphorism for the first template.\n");
+                printf("\nSeeds not generated (or not enough angular separations). Cannot select aphorisms for signs.\n");
             }
-
         } else {
             printf("No aphorism templates found or file empty.\n");
         }
