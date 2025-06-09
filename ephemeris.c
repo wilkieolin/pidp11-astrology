@@ -519,6 +519,84 @@ void print_relative_angular_separations(
 }
 
 /*
+ * get_relative_angular_separations
+ * Calculates the angular separation between each pair of celestial bodies
+ * based on their apparent Azimuth and Altitude from an observer's perspective.
+ * The results are stored in the 'separations_out' array.
+ *
+ * apparent_positions: Array of ApparentSkyPosition structures.
+ * num_planets: Total number of celestial bodies.
+ * separations_out: Array to store the calculated angular separations in degrees.
+ * max_separations: The maximum number of separations that can be stored in separations_out.
+ * Returns the number of separations calculated and stored, or -1 on error.
+ */
+int get_relative_angular_separations(
+    apparent_positions,
+    num_planets,
+    separations_out,
+    max_separations)
+    ApparentSkyPosition apparent_positions[];
+    int num_planets;
+    double separations_out[];
+    int max_separations;
+{
+    /* K&R C: All variable declarations at the top */
+    int i, j;
+    double az1_rad, alt1_rad, az2_rad, alt2_rad;
+    double cos_angle, angle_rad, angle_deg;
+    int separations_count;
+    int valid_planets_for_pairing[MAX_PLANETS]; /* Store indices of valid planets */
+    int num_valid_planets;
+    int p1_idx, p2_idx;
+
+    separations_count = 0;
+    num_valid_planets = 0;
+
+    /* First, collect indices of all valid planets for pairing */
+    for (i = 0; i < num_planets; ++i) {
+        if (apparent_positions[i].is_valid) {
+            if (num_valid_planets < MAX_PLANETS) {
+                valid_planets_for_pairing[num_valid_planets++] = i;
+            } else {
+                fprintf(stderr, "Error (get_relative_angular_separations): Exceeded internal buffer for valid planets.\n");
+                return -1;
+            }
+        }
+    }
+
+    if (num_valid_planets < 2) {
+        return 0; /* Not enough valid planets to form a pair */
+    }
+
+    for (i = 0; i < num_valid_planets; ++i) {
+        p1_idx = valid_planets_for_pairing[i];
+        for (j = i + 1; j < num_valid_planets; ++j) {
+            p2_idx = valid_planets_for_pairing[j];
+            if (separations_count >= max_separations) {
+                fprintf(stderr, "Error (get_relative_angular_separations): separations_out array too small.\n");
+                return -1; /* Output array full */
+            }
+            alt1_rad = apparent_positions[p1_idx].altitude_deg * DEG_TO_RAD;
+            az1_rad  = apparent_positions[p1_idx].azimuth_deg  * DEG_TO_RAD;
+            alt2_rad = apparent_positions[p2_idx].altitude_deg * DEG_TO_RAD;
+            az2_rad  = apparent_positions[p2_idx].azimuth_deg  * DEG_TO_RAD;
+
+            cos_angle = sin(alt1_rad) * sin(alt2_rad) +
+                        cos(alt1_rad) * cos(alt2_rad) * cos(az1_rad - az2_rad);
+
+            if (cos_angle > 1.0) cos_angle = 1.0;
+            if (cos_angle < -1.0) cos_angle = -1.0;
+
+            angle_rad = acos(cos_angle);
+            angle_deg = angle_rad * RAD_TO_DEG;
+
+            separations_out[separations_count++] = angle_deg;
+        }
+    }
+    return separations_count;
+}
+
+/*
  * print_helio_ecliptic_angular_separations
  * Calculates and prints the angular separation on the ecliptic plane between
  * each pair of planets, as viewed from the Sun (heliocentric perspective).
@@ -572,8 +650,68 @@ void print_helio_ecliptic_angular_separations(
     }
 }
 
+/*
+ * get_helio_ecliptic_angular_separations
+ * Calculates the angular separation on the ecliptic plane between
+ * each pair of planets, as viewed from the Sun (heliocentric perspective).
+ * The results are stored in the 'separations_out' array.
+ *
+ * all_planet_ephems: Array of PlanetEphem structures (heliocentric ecliptic coords).
+ * num_planets: Total number of celestial bodies.
+ * separations_out: Array to store the calculated angular separations in degrees.
+ * max_separations: The maximum number of separations that can be stored in separations_out.
+ * Returns the number of separations calculated and stored, or -1 on error.
+ */
+int get_helio_ecliptic_angular_separations(
+    all_planet_ephems,
+    num_planets,
+    separations_out,
+    max_separations)
+    PlanetEphem all_planet_ephems[];
+    int num_planets;
+    double separations_out[];
+    int max_separations;
+{
+    /* K&R C: All variable declarations at the top */
+    double helio_ecl_lon_deg[MAX_PLANETS];
+    int i, j;
+    double lon_rad;
+    double angle_diff_deg;
+    int separations_count;
+
+    separations_count = 0;
+
+    if (num_planets <= 1) {
+        return 0; /* Not enough planets to calculate separations */
+    }
+
+    /* Calculate heliocentric ecliptic longitude for each planet */
+    for (i = 0; i < num_planets; ++i) {
+        lon_rad = atan2(all_planet_ephems[i].y_h_ecl, all_planet_ephems[i].x_h_ecl);
+        helio_ecl_lon_deg[i] = normalize_angle_deg(lon_rad * RAD_TO_DEG);
+    }
+
+    /* Calculate and store angular separation between unique pairs */
+    for (i = 0; i < num_planets; ++i) {
+        for (j = i + 1; j < num_planets; ++j) {
+            if (separations_count >= max_separations) {
+                fprintf(stderr, "Error (get_helio_ecliptic_angular_separations): separations_out array too small.\n");
+                return -1; /* Output array full */
+            }
+            angle_diff_deg = fabs(helio_ecl_lon_deg[j] - helio_ecl_lon_deg[i]);
+            if (angle_diff_deg > 180.0) {
+                angle_diff_deg = 360.0 - angle_diff_deg;
+            }
+            separations_out[separations_count++] = angle_diff_deg;
+        }
+    }
+    return separations_count;
+}
+
 /* Example Usage */
 
+/* Define EPHEMERIS_MAIN_TEST to compile this main function for testing */
+#ifdef EPHEMERIS_MAIN_TEST
 int main() {
     /* K&R C: All declarations at the top of the block */
     OrbitalElements all_planets[MAX_PLANETS];
@@ -593,7 +731,11 @@ int main() {
     int earth_observer_idx = 2; /* EMBary is 3rd in ephemeris_data.txt (index 2) */
     double observer_lat = 41.77810;  /* Latitude of Naperville, IL (example) */
     double observer_lon = -88.08260; /* Longitude of Naperville, IL (example) */
-
+    
+    /* For testing new get_*_separations functions */
+    double separations_buffer[MAX_PLANETS * (MAX_PLANETS - 1) / 2]; /* Max possible separations */
+    int num_seps_calculated;
+    int k; /* Loop counter for printing separations from buffer */
     
     /* Initialize orbital elements from file */
     if (!initialize_orbital_elements_from_file("ephemeris_data.txt", all_planets, &num_planets_loaded)) {
@@ -661,11 +803,37 @@ int main() {
 
         print_relative_angular_separations(apparent_sky_pos, num_planets_loaded,
                                            all_planets, earth_observer_idx);
+
+        /* Test get_relative_angular_separations */
+        num_seps_calculated = get_relative_angular_separations(apparent_sky_pos, num_planets_loaded,
+                                                               separations_buffer,
+                                                               sizeof(separations_buffer)/sizeof(double));
+        if (num_seps_calculated >= 0) {
+            printf("\nGot %d relative angular separations (via get_relative_angular_separations):\n", num_seps_calculated);
+            for (k = 0; k < num_seps_calculated; k++) {
+                printf("  Sep #%d: %.2f deg\n", k + 1, separations_buffer[k]);
+            }
+        } else {
+            printf("\nError getting relative angular separations.\n");
+        }
     }
 
     /* Calculate and print heliocentric ecliptic angular separations */
     print_helio_ecliptic_angular_separations(all_planets, all_planet_ephems_data,
                                              num_planets_loaded);
 
+    /* Test get_helio_ecliptic_angular_separations */
+    num_seps_calculated = get_helio_ecliptic_angular_separations(all_planet_ephems_data, num_planets_loaded,
+                                                                 separations_buffer,
+                                                                 sizeof(separations_buffer)/sizeof(double));
+    if (num_seps_calculated >= 0) {
+        printf("\nGot %d heliocentric ecliptic angular separations (via get_helio_ecliptic_angular_separations):\n", num_seps_calculated);
+        for (k = 0; k < num_seps_calculated; k++) {
+            printf("  Sep #%d: %.2f deg\n", k + 1, separations_buffer[k]);
+        }
+    } else {
+        printf("\nError getting heliocentric ecliptic angular separations.\n");
+    }
     return 0;
 }
+#endif /* EPHEMERIS_MAIN_TEST */

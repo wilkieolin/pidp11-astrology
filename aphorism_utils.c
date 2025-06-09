@@ -2,8 +2,14 @@
 /* Compatible with K&R C style */
 
 #include <stdio.h>
-#include <string.h> /* For strncpy, strlen, strncmp, strcpy */
+#include <string.h> /* For strncpy, strlen, strncmp, strcpy, strchr, strtok_r, strdup */
+#include <stdlib.h> /* For strtod, free, NULL (strdup also often uses malloc from here) */
+#include <float.h>  /* For DBL_MAX */
 #include "aphorism_utils.h"
+
+#define NUM_ANGLES 49
+#define MAX_LINE_LENGTH 1024 /* Reasonably sized buffer for lines */
+#define MAX_WORD_LENGTH 256  /* Max expected word length */
 
 /*
  * read_aphorism_templates
@@ -216,6 +222,122 @@ int fill_aphorism_template(template_str,
 
     *p_out = '\0'; /* Null-terminate the output string */
     return APH_TRUE;
+}
+
+/**
+ * @brief Finds the word in a file whose 49 angular coordinates are closest
+ *        to the given input_angles.
+ *
+ * The file is expected to have lines in the format:
+ * word angle1 angle2 ... angle49
+ *
+ * Distance is calculated as the sum of squared differences between angles.
+ *
+ * @param input_angles An array of NUM_ANGLES doubles representing the target angles.
+ * @param filename The path to the space-delimited text file.
+ * @return A dynamically allocated string containing the nearest word.
+ *         The caller is responsible for freeing this memory.
+ *         Returns NULL if an error occurs (e.g., file not found, memory allocation failed)
+ *         or if no valid data is found in the file.
+ */
+char*
+find_nearest_neighbor(input_angles, filename)
+    double input_angles[NUM_ANGLES]; /* K&R: or double input_angles[] */
+    char* filename;
+{
+    /* K&R C: All variable declarations at the top of the function block */
+    FILE *file;
+    char line_buffer[MAX_LINE_LENGTH];
+    char *nearest_word_str;
+    double min_sq_distance;
+    char current_word[MAX_WORD_LENGTH];
+    double file_angles[NUM_ANGLES];
+    char *line_ptr;
+    char *token_saveptr; /* For strtok_r */
+    char *nl; /* For newline removal */
+    char *word_token;
+    int angles_parsed_count;
+    int i; /* Loop counter */
+    char *angle_token;
+    char *endptr; /* For strtod error checking */
+    double current_sq_distance;
+    double diff;
+
+    nearest_word_str = NULL; /* Initialize */
+    min_sq_distance = DBL_MAX;
+
+    file = fopen(filename, "r");
+    if (!file) {
+        perror("Error opening file");
+        return NULL;
+    }
+
+    while (fgets(line_buffer, sizeof(line_buffer), file)) {
+        line_ptr = line_buffer;
+
+        /* Remove newline character if present */
+        nl = strchr(line_buffer, '\n');
+        if (nl) *nl = '\0';
+        nl = strchr(line_buffer, '\r'); /* Handle CRNL too */
+        if (nl) *nl = '\0';
+
+        /* 1. Parse the word */
+        word_token = strtok_r(line_ptr, " ", &token_saveptr);
+        if (!word_token) {
+            /* fprintf(stderr, "Warning: Malformed line (missing word): %s\n", line_buffer); */
+            continue; /* Skip empty or malformed line */
+        }
+
+        if (strlen(word_token) >= MAX_WORD_LENGTH) {
+            /* fprintf(stderr, "Warning: Word '%s...' too long, skipping line.\n", word_token); */
+            continue; /* Word too long */
+        }
+        strcpy(current_word, word_token);
+
+        /* 2. Parse the NUM_ANGLES angles */
+        angles_parsed_count = 0;
+        for (i = 0; i < NUM_ANGLES; ++i) {
+            angle_token = strtok_r(NULL, " ", &token_saveptr);
+            if (!angle_token) {
+                break; /* Not enough tokens for all angles */
+            }
+            file_angles[i] = strtod(angle_token, &endptr);
+            if (endptr == angle_token || *endptr != '\0') { /* Check for conversion errors or non-numeric trailing chars */
+                 angles_parsed_count = -1; /* Mark as error */
+                 break;
+            }
+            angles_parsed_count++;
+        }
+
+        if (angles_parsed_count != NUM_ANGLES) {
+            /* fprintf(stderr, "Warning: Line for word '%s' did not contain %d valid angles (parsed %d).\n", current_word, NUM_ANGLES, (angles_parsed_count < 0 ? 0 : angles_parsed_count) ); */
+            continue; /* Skip this line if not all angles were parsed correctly */
+        }
+
+        /* 3. Calculate squared Euclidean distance */
+        current_sq_distance = 0.0;
+        for (i = 0; i < NUM_ANGLES; ++i) {
+            diff = file_angles[i] - input_angles[i];
+            current_sq_distance += diff * diff;
+        }
+
+        /* 4. Update nearest neighbor if this one is closer */
+        if (current_sq_distance < min_sq_distance) {
+            min_sq_distance = current_sq_distance;
+            if (nearest_word_str != NULL) {
+                free(nearest_word_str); /* Free previous word if any */
+            }
+            nearest_word_str = strdup(current_word); /* strdup allocates and copies */
+            if (!nearest_word_str) {
+                perror("Error allocating memory for nearest_word_str");
+                fclose(file);
+                return NULL; /* Critical memory error */
+            }
+        }
+    }
+
+    fclose(file);
+    return nearest_word_str; /* Caller must free this */
 }
 
 /* Define APHORISM_UTILS_MAIN_TEST to compile this main function for testing */

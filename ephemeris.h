@@ -99,4 +99,31 @@ void print_helio_ecliptic_angular_separations(
     /* PlanetEphem all_planet_ephems[], */
     /* int num_planets */); /* Corrected parameter comment */
 
+/*
+ * get_relative_angular_separations
+ * Calculates the angular separation between each pair of celestial bodies
+ * based on their apparent Azimuth and Altitude from an observer's perspective.
+ * The results are stored in the 'separations_out' array.
+ *
+ * apparent_positions: Array of ApparentSkyPosition structures.
+ * num_planets: Total number of celestial bodies.
+ * separations_out: Array to store the calculated angular separations in degrees.
+ * max_separations: The maximum number of separations that can be stored in separations_out.
+ * Returns the number of separations calculated and stored, or -1 on error.
+ */
+int get_relative_angular_separations( /* ApparentSkyPosition apparent_positions[], int num_planets, double separations_out[], int max_separations */ );
+
+/*
+ * get_helio_ecliptic_angular_separations
+ * Calculates the angular separation on the ecliptic plane between
+ * each pair of planets, as viewed from the Sun (heliocentric perspective).
+ * The results are stored in the 'separations_out' array.
+ *
+ * all_planet_ephems: Array of PlanetEphem structures (heliocentric ecliptic coords).
+ * num_planets: Total number of celestial bodies.
+ * separations_out: Array to store the calculated angular separations in degrees.
+ * max_separations: The maximum number of separations that can be stored in separations_out.
+ * Returns the number of separations calculated and stored, or -1 on error.
+ */
+int get_helio_ecliptic_angular_separations( /* PlanetEphem all_planet_ephems[], int num_planets, double separations_out[], int max_separations */ );
 #endif /* EPHEMERIS_H */

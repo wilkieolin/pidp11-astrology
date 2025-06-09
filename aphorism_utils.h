@@ -45,4 +45,16 @@ void parse_aphorism_template( /* char *template_str, int *num_n, int *num_v, int
  */
 int fill_aphorism_template( /* char *template_str, char *nouns[], int num_nouns_avail, char *verbs[], int num_verbs_avail, char *noun_verbs[], int num_noun_verbs_avail, char *output_buffer, int output_buffer_size */ );
 
+/*
+ * find_nearest_neighbor
+ * Finds the word in a file whose 49 angular coordinates are closest
+ * to the given input_angles. The constant NUM_ANGLES (49) is defined
+ * in aphorism_utils.c.
+ * input_angles: An array of doubles representing the target angles.
+ * filename: The path to the space-delimited text file.
+ * Returns a dynamically allocated string containing the nearest word (caller must free).
+ * Returns NULL on error or if no suitable word is found.
+ */
+char *find_nearest_neighbor( /* double input_angles[], char *filename */ );
+
 #endif /* APHORISM_UTILS_H */
