@@ -256,28 +256,27 @@ find_nearest_neighbor(input_angles, filename)
     double min_sq_distance;
     char current_word[MAX_WORD_LENGTH];
     double file_angles[NUM_ANGLES];
-    char *line_ptr;
-    char *token_saveptr; /* For strtok_r */
+    char *p; /* Pointer to walk through the line_buffer */
     char *nl; /* For newline removal */
-    char *word_token;
     int angles_parsed_count;
-    int i; /* Loop counter */
-    char *angle_token;
-    char *endptr; /* For strtod error checking */
+    int i, j; /* Loop counters */
     double current_sq_distance;
     double diff;
+    char token_buffer[MAX_WORD_LENGTH]; /* For individual words/numbers */
+    int token_len;
+    int sscanf_ret;
 
     nearest_word_str = NULL; /* Initialize */
     min_sq_distance = DBL_MAX_SUBSTITUTE;
 
     file = fopen(filename, "r");
     if (!file) {
-        perror("Error opening file");
+        perror("Error opening word angle data file");
         return NULL;
     }
 
     while (fgets(line_buffer, sizeof(line_buffer), file)) {
-        line_ptr = line_buffer;
+        p = line_buffer;
 
         /* Remove newline character if present */
         nl = strchr(line_buffer, '\n');
@@ -286,27 +285,37 @@ find_nearest_neighbor(input_angles, filename)
         if (nl) *nl = '\0';
 
         /* 1. Parse the word */
-        word_token = strtok_r(line_ptr, " ", &token_saveptr);
-        if (!word_token) {
+        token_len = 0;
+        while (*p != ' ' && *p != '\0' && token_len < MAX_WORD_LENGTH - 1) {
+            token_buffer[token_len++] = *p++;
+        }
+        token_buffer[token_len] = '\0';
+
+        if (token_len == 0) { /* Empty line or line starts with space */
             /* fprintf(stderr, "Warning: Malformed line (missing word): %s\n", line_buffer); */
             continue; /* Skip empty or malformed line */
         }
-
-        if (strlen(word_token) >= MAX_WORD_LENGTH) {
-            /* fprintf(stderr, "Warning: Word '%s...' too long, skipping line.\n", word_token); */
-            continue; /* Word too long */
-        }
-        strcpy(current_word, word_token);
+        strcpy(current_word, token_buffer);
 
         /* 2. Parse the NUM_ANGLES angles */
         angles_parsed_count = 0;
         for (i = 0; i < NUM_ANGLES; ++i) {
-            angle_token = strtok_r(NULL, " ", &token_saveptr);
-            if (!angle_token) {
+            while (*p == ' ') p++; /* Skip leading spaces for the next token */
+
+            if (*p == '\0') { /* End of line, not enough angles */
                 break; /* Not enough tokens for all angles */
             }
-            file_angles[i] = strtod(angle_token, &endptr);
-            if (endptr == angle_token || *endptr != '\0') { /* Check for conversion errors or non-numeric trailing chars */
+
+            token_len = 0;
+            while (*p != ' ' && *p != '\0' && token_len < MAX_WORD_LENGTH - 1) {
+                token_buffer[token_len++] = *p++;
+            }
+            token_buffer[token_len] = '\0';
+
+            if (token_len == 0) break; /* No token found (e.g. trailing spaces) */
+
+            sscanf_ret = sscanf(token_buffer, "%lf", &file_angles[i]);
+            if (sscanf_ret != 1) { /* Check if sscanf successfully assigned one item */
                  angles_parsed_count = -1; /* Mark as error */
                  break;
             }
@@ -314,14 +323,14 @@ find_nearest_neighbor(input_angles, filename)
         }
 
         if (angles_parsed_count != NUM_ANGLES) {
-            /* fprintf(stderr, "Warning: Line for word '%s' did not contain %d valid angles (parsed %d).\n", current_word, NUM_ANGLES, (angles_parsed_count < 0 ? 0 : angles_parsed_count) ); */
+            /* fprintf(stderr, "Warning: Line for word '%s' did not contain %d valid angles (parsed %d).\n", current_word, NUM_ANGLES, (angles_parsed_count < 0 ? 0 : angles_parsed_count)); */
             continue; /* Skip this line if not all angles were parsed correctly */
         }
 
         /* 3. Calculate squared Euclidean distance */
         current_sq_distance = 0.0;
-        for (i = 0; i < NUM_ANGLES; ++i) {
-            diff = file_angles[i] - input_angles[i];
+        for (j = 0; j < NUM_ANGLES; ++j) { /* Use j to avoid conflict with outer i */
+            diff = file_angles[j] - input_angles[j];
             current_sq_distance += diff * diff;
         }
 

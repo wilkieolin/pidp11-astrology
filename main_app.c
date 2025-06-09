@@ -183,10 +183,10 @@ int main(argc, argv)
     char aphorism_templates_storage[MAX_TEMPLATES][MAX_TEMPLATE_LEN];
     int num_tpls_read;
     int n_count, v_count, nv_count;
-    char filled_aphorism[MAX_TEMPLATE_LEN];
-    char *test_nouns[] = {"stars", "destiny"}; /* Example for aphorism */
-    char *test_verbs[] = {"align"};           /* Example for aphorism */
-    char *test_nv[] = {"cosmic insight"};    /* Example for aphorism */
+    char filled_aphorism[MAX_TEMPLATE_LEN];    
+    static char *test_nouns[] = {"stars", "destiny", NULL}; /* Example for aphorism, K&R: static for init */
+    static char *test_verbs[] = {"align", NULL};           /* K&R: static for init */
+    static char *test_nv[] = {"cosmic insight", NULL};    /* K&R: static for init */
 
     /* Example: Using OrbitalElements from ephemeris.h */
     OrbitalElements all_planets[MAX_PLANETS];
