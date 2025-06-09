@@ -4,12 +4,16 @@
 #include <stdio.h>
 #include <string.h> /* For strncpy, strlen, strncmp, strcpy, strchr, strtok_r, strdup */
 #include <stdlib.h> /* For strtod, free, NULL (strdup also often uses malloc from here) */
-#include <float.h>  /* For DBL_MAX */
 #include "aphorism_utils.h"
 
 #define NUM_ANGLES 49
 #define MAX_LINE_LENGTH 1024 /* Reasonably sized buffer for lines */
 #define MAX_WORD_LENGTH 256  /* Max expected word length */
+
+/* Substitute for DBL_MAX from <float.h> if not available */
+/* Used for initializing a variable to a very large value before finding a minimum. */
+/* 1.0e38 is a common large double literal. */
+#define DBL_MAX_SUBSTITUTE 1.0e38
 
 /*
  * read_aphorism_templates
@@ -264,7 +268,7 @@ find_nearest_neighbor(input_angles, filename)
     double diff;
 
     nearest_word_str = NULL; /* Initialize */
-    min_sq_distance = DBL_MAX;
+    min_sq_distance = DBL_MAX_SUBSTITUTE;
 
     file = fopen(filename, "r");
     if (!file) {

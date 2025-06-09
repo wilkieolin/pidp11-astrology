@@ -20,10 +20,16 @@ TARGET = my_astrology_app
 all: $(TARGET)
 
 # Rule to link the executable
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS) $(LIBS)
+# Original rule using intermediate object files (generally more efficient for incremental builds):
+# $(TARGET): $(OBJS)
+#	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS) $(LIBS)
 
-# Generic rule to compile .c files into .o files
+# Updated rule to compile and link source files directly for the target,
+# similar to the one-step command line compilation you used.
+$(TARGET): $(SRCS) aphorism_utils.h ephemeris.h # Dependencies: source files and their main headers
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(TARGET) $(SRCS) $(LIBS)
+
+# Generic rule to compile .c files into .o files (still useful for individual .o files or other targets)
 # This uses automatic variables:
 #   $< is the first prerequisite (the .c file)
 #   $@ is the target name (the .o file)

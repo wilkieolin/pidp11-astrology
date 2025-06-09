@@ -4,8 +4,12 @@
 #include <time.h>           /* For time(), localtime() if not using user input */
 #include "ephemeris.h"      /* For ephemeris calculations */
 #include <string.h>        /* For strlen */
-#include <float.h>         /* For DBL_MAX */
 #include "aphorism_utils.h" /* For aphorism generation */
+
+/* Substitute for DBL_MAX from <float.h> if not available */
+/* Used for initializing a variable to a very large value before finding a minimum. */
+/* 1.0e38 is a common large double literal. */
+#define DBL_MAX_SUBSTITUTE 1.0e38
 
 /*
  * generate_astrological_seeds
@@ -150,7 +154,7 @@ int select_templates_for_signs(astrological_seeds, num_total_templates, selected
         ideal_target_float = astrological_seeds[i] * (double)num_total_templates;
         
         best_original_idx = -1;
-        min_abs_diff = DBL_MAX;
+        min_abs_diff = DBL_MAX_SUBSTITUTE;
 
         for (j = 0; j < num_total_templates; ++j) {
             if (!is_template_used[j]) {
