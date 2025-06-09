@@ -3,6 +3,7 @@
 #include <math.h>           /* For cos, sin, atan2 */
 #include <time.h>           /* For time(), localtime() if not using user input */
 #include "ephemeris.h"      /* For ephemeris calculations */
+#include <stdlib.h>        /* For free() */
 #include <string.h>        /* For strlen */
 #include "aphorism_utils.h" /* For aphorism generation */
 
@@ -11,6 +12,60 @@
 /* 1.0e38 is a common large double literal. */
 #define DBL_MAX_SUBSTITUTE 1.0e38
 
+/* Number of angles to use from the vector for word selection via nearest neighbor. */
+#define NUM_ANGLES_FOR_WORD_SELECTION 49 /* Must match NUM_ANGLES in aphorism_utils.c */
+
+/*
+ * rotate_double_vector
+ * Shifts each element in the vector one position forward (to the right),
+ * with the last element wrapping around to the first position.
+ *
+ * vector: Array of double-precision values to be rotated.
+ * size: The number of elements in the vector.
+ */
+static void rotate_double_vector(vector, size)
+    double vector[];
+    int size;
+{
+    double last_element;
+    int i;
+
+    if (vector == NULL || size <= 1) {
+        return; /* Nothing to rotate or invalid input */
+    }
+
+    last_element = vector[size - 1];
+
+    /* Shift elements to the right */
+    for (i = size - 1; i > 0; --i) {
+        vector[i] = vector[i - 1];
+    }
+
+    vector[0] = last_element; /* Wrap around */
+}
+
+/*
+ * add_to_vector
+ * Adds a constant angular value (in degrees) to all elements in the
+ * passed vector, normalizing them to the range [0, 360) degrees.
+ *
+ * vector: Array of double-precision angles in degrees.
+ * size: The number of elements in the vector.
+ * offset_deg: The angular value in degrees to add to each element.
+ */
+static void add_to_vector(vector, size, offset_deg)
+    double vector[];
+    int size;
+    double offset_deg;
+{
+    int i;
+    if (vector == NULL || size <= 0) {
+        return; /* Nothing to modify or invalid input */
+    }
+    for (i = 0; i < size; ++i) {
+        vector[i] = normalize_angle_deg(vector[i] + offset_deg); /* normalize_angle_deg from ephemeris.h */
+    }
+}
 /*
  * generate_astrological_seeds
  * Produces 12 pseudo-random double-precision values based on an input vector.
@@ -175,6 +230,158 @@ int select_templates_for_signs(astrological_seeds, num_total_templates, selected
     return num_assigned;
 }
 
+/*
+ * fill_template
+ * Fills a selected aphorism template using words chosen by nearest neighbor search
+ * based on a rotating vector of angles. The input angular_vector is modified (rotated).
+ *
+ * template_to_fill_original: The original aphorism template string.
+ * angular_vector: The vector of double-precision angles used for word selection.
+ *                 This vector will be rotated by this function.
+ * num_total_angles_in_vector: The total number of angles in angular_vector.
+ * filled_aphorism_output: Buffer to store the generated aphorism.
+ * filled_aphorism_output_size: Size of the filled_aphorism_output buffer.
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+static int fill_template(template_to_fill_original, angular_vector, num_total_angles_in_vector,
+                         filled_aphorism_output, filled_aphorism_output_size)
+    char *template_to_fill_original;
+    double angular_vector[];
+    int num_total_angles_in_vector;
+    char filled_aphorism_output[];
+    int filled_aphorism_output_size;
+{
+    /* K&R C: All variable declarations at the top */
+    char processed_template_buffer[MAX_TEMPLATE_LEN]; /* From aphorism_utils.h */
+    char *p_orig, *p_proc;
+    int n_needed, v_needed, nv_needed; /* For parsing the processed template */
+    double embedding_angles[NUM_ANGLES_FOR_WORD_SELECTION];
+    char *selected_word;
+    char *p_template_iterator; /* To iterate through processed_template_buffer */
+    int i; /* General loop counter */
+
+    /* Arrays to store dynamically allocated words */
+    /* MAX_TEMPLATE_LEN/3 is a loose upper bound on placeholders. Add some safety. */
+#define MAX_WORDS_COLLECTED (MAX_TEMPLATE_LEN / 3 + 5)
+    char *collected_N_words[MAX_WORDS_COLLECTED];
+    char *collected_V_words[MAX_WORDS_COLLECTED];
+    int n_collected_idx;
+    int v_collected_idx;
+
+    /* Initialize collected word arrays and indices */
+    n_collected_idx = 0;
+    v_collected_idx = 0;
+    for (i = 0; i < MAX_WORDS_COLLECTED; ++i) {
+        collected_N_words[i] = NULL;
+        collected_V_words[i] = NULL;
+    }
+
+    /* Basic input validation */
+    if (template_to_fill_original == NULL || angular_vector == NULL || filled_aphorism_output == NULL) return 0;
+    if (num_total_angles_in_vector < NUM_ANGLES_FOR_WORD_SELECTION) {
+        fprintf(stderr, "Error (fill_template): Not enough angles in vector for word selection (need %d, have %d).\n",
+                NUM_ANGLES_FOR_WORD_SELECTION, num_total_angles_in_vector);
+        return 0;
+    }
+    if (filled_aphorism_output_size <= 0) return 0;
+
+    /* 1. Pre-process template: Convert (NV) to (N) or (V) */
+    p_orig = template_to_fill_original;
+    p_proc = processed_template_buffer;
+    while (*p_orig != '\0' && (p_proc - processed_template_buffer) < (MAX_TEMPLATE_LEN - 4)) { /* Safety for (NV) + null */
+        if (strncmp(p_orig, "(NV)", 4) == 0) {
+            if (num_total_angles_in_vector > 0 && angular_vector[num_total_angles_in_vector - 1] >= 0.0) { /* Positive -> Noun */
+                strcpy(p_proc, "(N)");
+                p_proc += 3;
+            } else { /* Negative or zero -> Verb */
+                strcpy(p_proc, "(V)");
+                p_proc += 3;
+            }
+            p_orig += 4; /* Advance past "(NV)" in original */
+        } else {
+            *p_proc++ = *p_orig++;
+        }
+    }
+    *p_proc = '\0';
+
+    /* 2. Parse the processed template to get actual N and V counts */
+    parse_aphorism_template(processed_template_buffer, &n_needed, &v_needed, &nv_needed);
+    if (nv_needed != 0) {
+        /* This should not happen if pre-processing is correct */
+        fprintf(stderr, "Error (fill_template): (NV) placeholder found after pre-processing.\n");
+        return 0; /* Error state */
+    }
+
+    /* 3. Iterate through processed template, select words, and rotate vector */
+    p_template_iterator = processed_template_buffer;
+    while (*p_template_iterator != '\0') {
+        if (*p_template_iterator == '(') {
+            char *word_category_type = NULL; /* "N" or "V" */
+            char *word_data_file = NULL;
+
+            if (strncmp(p_template_iterator, "(N)", 3) == 0) {
+                word_category_type = "N";
+                word_data_file = "words/nouns.txt";
+                p_template_iterator += 3;
+            } else if (strncmp(p_template_iterator, "(V)", 3) == 0) {
+                word_category_type = "V";
+                word_data_file = "words/verbs.txt";
+                p_template_iterator += 3;
+            } else {
+                p_template_iterator++; /* Not a recognized (N) or (V), skip */
+                continue;
+            }
+
+            if (word_category_type) {
+                for (i = 0; i < NUM_ANGLES_FOR_WORD_SELECTION; ++i) {
+                    embedding_angles[i] = angular_vector[i];
+                }
+                selected_word = find_nearest_neighbor(embedding_angles, word_data_file);
+                if (selected_word == NULL) {
+                    fprintf(stderr, "Error (fill_template): find_nearest_neighbor failed for %s from %s.\n", word_category_type, word_data_file);
+                    goto cleanup_failure;
+                }
+
+                if (strcmp(word_category_type, "N") == 0) {
+                    if (n_collected_idx < MAX_WORDS_COLLECTED) collected_N_words[n_collected_idx++] = selected_word; else goto cleanup_failure_oom;
+                } else { /* "V" */
+                    if (v_collected_idx < MAX_WORDS_COLLECTED) collected_V_words[v_collected_idx++] = selected_word; else goto cleanup_failure_oom;
+                }
+                rotate_double_vector(angular_vector, num_total_angles_in_vector);
+            }
+        } else {
+            p_template_iterator++;
+        }
+    }
+
+    if (n_collected_idx != n_needed || v_collected_idx != v_needed) {
+        fprintf(stderr, "Error (fill_template): Word count mismatch (N: %d/%d, V: %d/%d).\n", n_collected_idx, n_needed, v_collected_idx, v_needed);
+        goto cleanup_failure;
+    }
+
+    /* 4. Fill the processed template with collected words */
+    if (!fill_aphorism_template(processed_template_buffer, collected_N_words, n_collected_idx,
+                                collected_V_words, v_collected_idx, NULL, 0, /* No NV words for final fill */
+                                filled_aphorism_output, filled_aphorism_output_size)) {
+        fprintf(stderr, "Error (fill_template): Final fill_aphorism_template call failed.\n");
+        goto cleanup_failure;
+    }
+
+    /* 5. Cleanup dynamically allocated words */
+    for (i = 0; i < n_collected_idx; ++i) if (collected_N_words[i]) free(collected_N_words[i]);
+    for (i = 0; i < v_collected_idx; ++i) if (collected_V_words[i]) free(collected_V_words[i]);
+    return 1; /* Success */
+
+cleanup_failure_oom:
+    fprintf(stderr, "Error (fill_template): Exceeded word collection buffer.\n");
+    if (selected_word) free(selected_word); /* Free the word that couldn't be stored */
+cleanup_failure:
+    for (i = 0; i < n_collected_idx; ++i) if (collected_N_words[i]) free(collected_N_words[i]);
+    for (i = 0; i < v_collected_idx; ++i) if (collected_V_words[i]) free(collected_V_words[i]);
+    return 0; /* Failure */
+}
+
 /* K&R C style main function */
 int main(argc, argv)
     int argc;
@@ -183,10 +390,7 @@ int main(argc, argv)
     char aphorism_templates_storage[MAX_TEMPLATES][MAX_TEMPLATE_LEN];
     int num_tpls_read;
     int n_count, v_count, nv_count;
-    char filled_aphorism[MAX_TEMPLATE_LEN];    
-    static char *test_nouns[] = {"stars", "destiny", NULL}; /* Example for aphorism, K&R: static for init */
-    static char *test_verbs[] = {"align", NULL};           /* K&R: static for init */
-    static char *test_nv[] = {"cosmic insight", NULL};    /* K&R: static for init */
+    char filled_aphorism[MAX_TEMPLATE_LEN];
 
     /* Example: Using OrbitalElements from ephemeris.h */
     OrbitalElements all_planets[MAX_PLANETS];
@@ -403,19 +607,26 @@ aphorism_section: /* Label for goto if ephemeris part is skipped */
                             char* current_template_str = aphorism_templates_storage[selected_aphorism_indices[m]];
                             printf("--- Sign %d (Template #%d) ---\n", m + 1, selected_aphorism_indices[m]);
                             
-                            parse_aphorism_template(current_template_str, &n_count, &v_count, &nv_count);
-                            printf("  Requires: (N)=%d, (V)=%d, (NV)=%d\n", n_count, v_count, nv_count);
-
-                            if (fill_aphorism_template(current_template_str,
-                                                       test_nouns, sizeof(test_nouns)/sizeof(char*),
-                                                       test_verbs, sizeof(test_verbs)/sizeof(char*),
-                                                       test_nv, sizeof(test_nv)/sizeof(char*),
-                                                       filled_aphorism, MAX_TEMPLATE_LEN)) {
+                            /* Use the new fill_template function */
+                            if (fill_template(current_template_str,
+                                              combined_angular_separations, /* This vector will be rotated */
+                                              total_seps_in_vector,
+                                              filled_aphorism, MAX_TEMPLATE_LEN)) {
                                 printf("  Aphorism: %s\n\n", filled_aphorism);
                             } else {
-                                printf("  Could not generate aphorism for sign %d.\n\n", m + 1);
+                                printf("  Could not dynamically generate aphorism for sign %d.\n\n", m + 1);
                             }
-                        } /* No else needed, already printed "No template assigned" above */
+
+                            /* After filling template for sign m, add offset to the angular vector
+                             * for the next sign's aphorism generation.
+                             */
+                            if (total_seps_in_vector > 0) {
+                                double offset_degrees_to_add = 30.0; /* (2.0 * PI / 12.0) * RAD_TO_DEG */
+                                add_to_vector(combined_angular_separations,
+                                              total_seps_in_vector,
+                                              offset_degrees_to_add);
+                            }
+                        } /* End if (selected_aphorism_indices[m] != -1) */
                     }
                 }
             } else {
