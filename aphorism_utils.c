@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h> /* For strncpy, strlen, strncmp, strcpy, strchr, strtok_r, strdup */
 #include <stdlib.h> /* For strtod, free, NULL (strdup also often uses malloc from here) */
+#include <math.h>   /* For sqrt - assuming this is available in the build environment */
 #include "aphorism_utils.h"
 
 #define NUM_ANGLES 49
@@ -14,6 +15,12 @@
 /* Used for initializing a variable to a very large value before finding a minimum. */
 /* 1.0e38 is a common large double literal. */
 #define DBL_MAX_SUBSTITUTE 1.0e38
+
+/* Define PI if not available (e.g., in strict K&R C without math.h M_PI) */
+#define MY_PI 3.14159265358979323846
+
+/* Define this to enable debug prints in find_nearest_neighbor */
+/* #define DEBUG_NEAREST_NEIGHBOR */
 
 /*
  * read_aphorism_templates
@@ -252,28 +259,44 @@ find_nearest_neighbor(input_angles, filename)
     /* K&R C: All variable declarations at the top of the function block */
     FILE *file;
     char line_buffer[MAX_LINE_LENGTH];
-    char *nearest_word_str;
-    double min_sq_distance;
+    char *nearest_word_str; /* Stores the word with the smallest cosine distance */
+    double min_cosine_distance; /* Smallest cosine distance found so far */
     char current_word[MAX_WORD_LENGTH];
     double file_angles[NUM_ANGLES];
     char *p; /* Pointer to walk through the line_buffer */
     char *nl; /* For newline removal */
     int angles_parsed_count;
-    int i, j; /* Loop counters */
-    double current_sq_distance;
-    double diff;
+    int i, j, k; /* Loop counters */
     char token_buffer[MAX_WORD_LENGTH]; /* For individual words/numbers */
     int token_len;
     int sscanf_ret;
+    double angle_from_file_rad; /* Temporary variable to store angle read from file in radians */
+    double input_angles_deg[NUM_ANGLES]; /* To store input angles in degrees */
+    double dot_product;
+    double magnitude_input_deg;
+    double magnitude_file_deg;
+    double similarity;
+    double current_cosine_distance; /* Current word's cosine distance to input */
 
     nearest_word_str = NULL; /* Initialize */
-    min_sq_distance = DBL_MAX_SUBSTITUTE;
+    min_cosine_distance = DBL_MAX_SUBSTITUTE; /* Initialize with a large value (cosine distance is 0 to 2) */
 
     file = fopen(filename, "r");
     if (!file) {
         perror("Error opening word angle data file");
         return NULL;
     }
+
+    /* Convert input_angles to degrees and calculate its magnitude */
+    magnitude_input_deg = 0.0;
+    for (k = 0; k < NUM_ANGLES; ++k) {
+        input_angles_deg[k] = input_angles[k] * (180.0 / MY_PI);
+        magnitude_input_deg += input_angles_deg[k] * input_angles_deg[k];
+    }
+    /* It's important that sqrt is available. If not, this will not compile/link. */
+    /* K&R C itself doesn't standardize math.h, but many compilers provide it. */
+    /* The use of other ANSI C functions (strtod, strdup) suggests it might be okay. */
+    magnitude_input_deg = sqrt(magnitude_input_deg);
 
     while (fgets(line_buffer, sizeof(line_buffer), file)) {
         p = line_buffer;
@@ -314,11 +337,12 @@ find_nearest_neighbor(input_angles, filename)
 
             if (token_len == 0) break; /* No token found (e.g. trailing spaces) */
 
-            sscanf_ret = sscanf(token_buffer, "%lf", &file_angles[i]);
+            sscanf_ret = sscanf(token_buffer, "%lf", &angle_from_file_rad);
             if (sscanf_ret != 1) { /* Check if sscanf successfully assigned one item */
                  angles_parsed_count = -1; /* Mark as error */
                  break;
             }
+            file_angles[i] = angle_from_file_rad * (180.0 / MY_PI); /* Convert to degrees */
             angles_parsed_count++;
         }
 
@@ -327,16 +351,33 @@ find_nearest_neighbor(input_angles, filename)
             continue; /* Skip this line if not all angles were parsed correctly */
         }
 
-        /* 3. Calculate squared Euclidean distance */
-        current_sq_distance = 0.0;
-        for (j = 0; j < NUM_ANGLES; ++j) { /* Use j to avoid conflict with outer i */
-            diff = file_angles[j] - input_angles[j];
-            current_sq_distance += diff * diff;
+        /* 3. Calculate Cosine Distance */
+        dot_product = 0.0;
+        magnitude_file_deg = 0.0;
+
+        for (j = 0; j < NUM_ANGLES; ++j) {
+            dot_product += input_angles_deg[j] * file_angles[j];
+            magnitude_file_deg += file_angles[j] * file_angles[j];
+        }
+        magnitude_file_deg = sqrt(magnitude_file_deg);
+
+        if (magnitude_input_deg == 0.0 || magnitude_file_deg == 0.0) {
+            /* If either vector has zero magnitude, cosine similarity is undefined or 0. */
+            /* Treat as dissimilar (similarity = 0, distance = 1). */
+            similarity = 0.0;
+        } else {
+            similarity = dot_product / (magnitude_input_deg * magnitude_file_deg);
         }
 
+        /* Clamp similarity to [-1, 1] to handle potential floating point inaccuracies */
+        if (similarity > 1.0) similarity = 1.0;
+        if (similarity < -1.0) similarity = -1.0;
+
+        current_cosine_distance = 1.0 - similarity; /* Cosine distance */
+
         /* 4. Update nearest neighbor if this one is closer */
-        if (current_sq_distance < min_sq_distance) {
-            min_sq_distance = current_sq_distance;
+        if (current_cosine_distance < min_cosine_distance) {
+            min_cosine_distance = current_cosine_distance;
             if (nearest_word_str != NULL) {
                 free(nearest_word_str); /* Free previous word if any */
             }
@@ -346,6 +387,10 @@ find_nearest_neighbor(input_angles, filename)
                 fclose(file);
                 return NULL; /* Critical memory error */
             }
+            #ifdef DEBUG_NEAREST_NEIGHBOR
+            fprintf(stderr, "[DEBUG] New nearest word: '%s' (Distance: %f)\n",
+                    nearest_word_str, min_cosine_distance);
+            #endif
         }
     }
 

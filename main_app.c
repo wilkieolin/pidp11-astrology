@@ -15,6 +15,15 @@
 /* Number of angles to use from the vector for word selection via nearest neighbor. */
 #define NUM_ANGLES_FOR_WORD_SELECTION 49 /* Must match NUM_ANGLES in aphorism_utils.c */
 
+/* Define this to enable debug prints for the angular vector in main_app.c */
+/* #define DEBUG_ANGULAR_VECTOR_MAIN */
+
+/* Names for the 12 Zodiac signs, 0-indexed */
+static const char *zodiac_signs[12] = {
+    "Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+    "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"
+};
+
 /*
  * rotate_double_vector
  * Shifts each element in the vector one position forward (to the right),
@@ -349,6 +358,16 @@ static int fill_template(template_to_fill_original, angular_vector, num_total_an
                     if (v_collected_idx < MAX_WORDS_COLLECTED) collected_V_words[v_collected_idx++] = selected_word; else goto cleanup_failure_oom;
                 }
                 rotate_double_vector(angular_vector, num_total_angles_in_vector);
+#ifdef DEBUG_ANGULAR_VECTOR_MAIN
+                fprintf(stderr, "[DEBUG_MAIN_APP] Angular vector (size %d) after rotation in fill_template:\n", num_total_angles_in_vector);
+                for (int dbg_idx = 0; dbg_idx < num_total_angles_in_vector; ++dbg_idx) {
+                    fprintf(stderr, "  [%d] = %f\n", dbg_idx, angular_vector[dbg_idx]);
+                    if (dbg_idx >= 9 && dbg_idx < num_total_angles_in_vector -1 ) { /* Print first 10 then stop for brevity */
+                        fprintf(stderr, "  ... (omitting %d more values)\n", num_total_angles_in_vector - 1 - dbg_idx);
+                        break;
+                    }
+                }
+#endif
             }
         } else {
             p_template_iterator++;
@@ -425,7 +444,7 @@ int main(argc, argv)
     int selected_aphorism_indices[12]; /* For storing indices of selected templates */
     int num_aphorisms_selected_for_signs;
 
-    printf("Welcome to the K&R Astrology Program!\n");
+    printf("PDP-11 ASTROLOGICAL ATLAS INITIALIZED\n");
 
     /* --- Initialize and use ephemeris functions --- */
     printf("\nInitializing Ephemeris Data...\n");
@@ -543,7 +562,7 @@ int main(argc, argv)
     total_seps_in_vector = current_buffer_offset;
 
     /* Print the combined vector of angular separations */
-    if (total_seps_in_vector > 0) {
+    /* if (total_seps_in_vector > 0) {
         printf("\nCombined Angular Separations Vector (total %d values):\n", total_seps_in_vector);
         for (k = 0; k < total_seps_in_vector; k++) {
             printf("  Value #%d: %.2f deg\n", k + 1, combined_angular_separations[k]);
@@ -553,7 +572,7 @@ int main(argc, argv)
         }
     } else {
         printf("\nNo angular separations were calculated to display.\n");
-    }
+    } */
 
     /* Generate astrological seeds if enough data is available */
     /* New algorithm needs at least (12 - 1) + 52 = 63 elements */
@@ -561,9 +580,9 @@ int main(argc, argv)
         printf("\nGenerating astrological seeds from the first 64 angular separations...\n");
         if (generate_astrological_seeds(combined_angular_separations, astrological_seeds)) {
             printf("Successfully generated 12 astrological seeds:\n");
-            for (m = 0; m < 12; ++m) {
+            /* for (m = 0; m < 12; ++m) {
                 printf("  Seed #%d: %f\n", m + 1, astrological_seeds[m]);
-            }
+            } */
         } else {
             fprintf(stderr, "Failed to generate astrological seeds.\n");
         }
@@ -573,48 +592,48 @@ int main(argc, argv)
     }
 
 aphorism_section: /* Label for goto if ephemeris part is skipped */
-    printf("\nReading Aphorism Templates...\n");
+    printf("\nInitializing prognostication...\n");
     if (read_aphorism_templates("aphorism_templates.txt", aphorism_templates_storage, MAX_TEMPLATES, MAX_TEMPLATE_LEN, &num_tpls_read)) {
         if (num_tpls_read > 0) {
-            printf("Successfully read %d aphorism templates.\n", num_tpls_read);
+            printf("Prognotication initialized.\n");
 
             /* Select aphorism templates for signs if seeds were also generated */
             if (total_seps_in_vector >= 63) { /* Check if seeds were likely generated */
-                printf("\nSelecting aphorism templates for 12 signs...\n");
+                /*printf("\nSelecting aphorism templates for 12 signs...\n"); */
                 num_aphorisms_selected_for_signs = select_templates_for_signs(
                     astrological_seeds,
                     num_tpls_read,
                     selected_aphorism_indices
                 );
-                printf("Selected %d aphorisms for the signs:\n", num_aphorisms_selected_for_signs);
-                for (m = 0; m < 12; ++m) {
-                    if (selected_aphorism_indices[m] != -1) {
-                        printf("  Sign %2d: Template #%2d (\"%.30s%s\")\n",
-                               m + 1,
-                               selected_aphorism_indices[m],
-                               aphorism_templates_storage[selected_aphorism_indices[m]],
-                               strlen(aphorism_templates_storage[selected_aphorism_indices[m]]) > 30 ? "..." : "");
-                    } else {
-                        printf("  Sign %2d: No template assigned.\n", m + 1);
-                    }
-                }
+                /*printf("Selected %d aphorisms for the signs:\n", num_aphorisms_selected_for_signs);*/
+                /* for (m = 0; m < 12; ++m) {
+                *    if (selected_aphorism_indices[m] != -1) {
+                *         printf("  Sign %-11s: Template #%2d (\"%.30s%s\")\n",
+                *              zodiac_signs[m],
+                *              selected_aphorism_indices[m],
+                *               aphorism_templates_storage[selected_aphorism_indices[m]],
+                *               strlen(aphorism_templates_storage[selected_aphorism_indices[m]]) > 30 ? "..." : ""); 
+                *    } else {
+                *        printf("  Sign %-11s: No template assigned.\n", zodiac_signs[m]);
+                *   }
+                } */
 
                 /* Now, fill and print the selected aphorisms */
                 if (num_aphorisms_selected_for_signs > 0) {
-                    printf("\nGenerating aphorisms for the 12 signs:\n");
+                    printf("\nWriting horoscopes:\n");
                     for (m = 0; m < 12; ++m) {
                         if (selected_aphorism_indices[m] != -1) {
                             char* current_template_str = aphorism_templates_storage[selected_aphorism_indices[m]];
-                            printf("--- Sign %d (Template #%d) ---\n", m + 1, selected_aphorism_indices[m]);
+                            /* printf("--- %s (Template #%d) ---\n", zodiac_signs[m], selected_aphorism_indices[m]); */
                             
                             /* Use the new fill_template function */
                             if (fill_template(current_template_str,
                                               combined_angular_separations, /* This vector will be rotated */
                                               total_seps_in_vector,
                                               filled_aphorism, MAX_TEMPLATE_LEN)) {
-                                printf("  Aphorism: %s\n\n", filled_aphorism);
+                                printf("  Wisdom for %s:\n    %s\n\n", zodiac_signs[m], filled_aphorism);
                             } else {
-                                printf("  Could not dynamically generate aphorism for sign %d.\n\n", m + 1);
+                                printf("  Could not dynamically generate horoscope for sign %d.\n\n", m + 1);
                             }
 
                             /* After filling template for sign m, add offset to the angular vector
@@ -625,6 +644,16 @@ aphorism_section: /* Label for goto if ephemeris part is skipped */
                                 add_to_vector(combined_angular_separations,
                                               total_seps_in_vector,
                                               offset_degrees_to_add);
+#ifdef DEBUG_ANGULAR_VECTOR_MAIN
+                                fprintf(stderr, "[DEBUG_MAIN_APP] Angular vector (size %d) after adding offset (following %s):\n", total_seps_in_vector, zodiac_signs[m]);
+                                for (k = 0; k < total_seps_in_vector; ++k) {
+                                    fprintf(stderr, "  [%d] = %f\n", k, combined_angular_separations[k]);
+                                    if (k >= 9 && k < total_seps_in_vector - 1) { /* Print first 10 then stop for brevity */
+                                        fprintf(stderr, "  ... (omitting %d more values)\n", total_seps_in_vector - 1 - k);
+                                        break;
+                                    }
+                                }
+#endif
                             }
                         } /* End if (selected_aphorism_indices[m] != -1) */
                     }
