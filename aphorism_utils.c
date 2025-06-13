@@ -19,8 +19,8 @@
 /* Define PI if not available (e.g., in strict K&R C without math.h M_PI) */
 #define MY_PI 3.14159265358979323846
 
-/* Define this to enable debug prints in find_nearest_neighbor */
-/* #define DEBUG_NEAREST_NEIGHBOR */
+/* Set to 1 to enable debug prints in find_nearest_neighbor, 0 to disable */
+#define DEBUG_NEAREST_NEIGHBOR_FLAG 0 /* Set to 1 to enable */
 
 /*
  * read_aphorism_templates
@@ -387,10 +387,10 @@ find_nearest_neighbor(input_angles, filename)
                 fclose(file);
                 return NULL; /* Critical memory error */
             }
-            #ifdef DEBUG_NEAREST_NEIGHBOR
-            fprintf(stderr, "[DEBUG] New nearest word: '%s' (Distance: %f)\n",
-                    nearest_word_str, min_cosine_distance);
-            #endif
+            if (DEBUG_NEAREST_NEIGHBOR_FLAG) {
+                fprintf(stderr, "[DEBUG_APH_UTIL] New nearest word: '%s' (Distance: %f)\n",
+                        nearest_word_str, min_cosine_distance);
+            }
         }
     }
 

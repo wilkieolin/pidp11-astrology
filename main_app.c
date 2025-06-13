@@ -19,10 +19,23 @@
 /* #define DEBUG_ANGULAR_VECTOR_MAIN */
 
 /* Names for the 12 Zodiac signs, 0-indexed */
-static const char *zodiac_signs[12] = {
-    "Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
-    "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"
-};
+static char *zodiac_signs[12]; /* K&R: Declare without const and initializer */
+
+/* K&R C: Function to initialize the static zodiac_signs array */
+static void initialize_zodiac_signs() {
+    zodiac_signs[0] = "Aries";
+    zodiac_signs[1] = "Taurus";
+    zodiac_signs[2] = "Gemini";
+    zodiac_signs[3] = "Cancer";
+    zodiac_signs[4] = "Leo";
+    zodiac_signs[5] = "Virgo";
+    zodiac_signs[6] = "Libra";
+    zodiac_signs[7] = "Scorpio";
+    zodiac_signs[8] = "Sagittarius";
+    zodiac_signs[9] = "Capricorn";
+    zodiac_signs[10] = "Aquarius";
+    zodiac_signs[11] = "Pisces";
+}
 
 /*
  * rotate_double_vector
@@ -445,6 +458,9 @@ int main(argc, argv)
     int num_aphorisms_selected_for_signs;
 
     printf("PDP-11 ASTROLOGICAL ATLAS INITIALIZED\n");
+
+    /* Initialize global/static data structures */
+    initialize_zodiac_signs();
 
     /* --- Initialize and use ephemeris functions --- */
     printf("\nInitializing Ephemeris Data...\n");
