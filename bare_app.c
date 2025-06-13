@@ -1,0 +1,619 @@
+/* bare_app.c - Astrology application, writes out only horoscopes to terminal */
+#include <stdio.h>
+#include <math.h>           /* For cos, sin, atan2 */
+#include <time.h>           /* For time(), localtime() if not using user input */
+#include "ephemeris.h"      /* For ephemeris calculations */
+#include <stdlib.h>        /* For free() */
+#include <string.h>        /* For strlen */
+#include "aphorism_utils.h" /* For aphorism generation */
+
+/* Substitute for DBL_MAX from <float.h> if not available */
+/* Used for initializing a variable to a very large value before finding a minimum. */
+/* 1.0e38 is a common large double literal. */
+#define DBL_MAX_SUBSTITUTE 1.0e38
+
+/* Number of angles to use from the vector for word selection via nearest neighbor. */
+#define NUM_ANGLES_FOR_WORD_SELECTION 49 /* Must match NUM_ANGLES in aphorism_utils.c */
+
+/* Define this to enable debug prints for the angular vector in main_app.c */
+/* #define DEBUG_ANGULAR_VECTOR_MAIN */
+
+/* Names for the 12 Zodiac signs, 0-indexed */
+static char *zodiac_signs[12]; /* K&R: Declare without const and initializer */
+
+/* K&R C: Function to initialize the static zodiac_signs array */
+static void initialize_zodiac_signs() {
+    zodiac_signs[0] = "Aries";
+    zodiac_signs[1] = "Taurus";
+    zodiac_signs[2] = "Gemini";
+    zodiac_signs[3] = "Cancer";
+    zodiac_signs[4] = "Leo";
+    zodiac_signs[5] = "Virgo";
+    zodiac_signs[6] = "Libra";
+    zodiac_signs[7] = "Scorpio";
+    zodiac_signs[8] = "Sagittarius";
+    zodiac_signs[9] = "Capricorn";
+    zodiac_signs[10] = "Aquarius";
+    zodiac_signs[11] = "Pisces";
+}
+
+/*
+ * rotate_double_vector
+ * Shifts each element in the vector one position forward (to the right),
+ * with the last element wrapping around to the first position.
+ *
+ * vector: Array of double-precision values to be rotated.
+ * size: The number of elements in the vector.
+ */
+static void rotate_double_vector(vector, size)
+    double vector[];
+    int size;
+{
+    double last_element;
+    int i;
+
+    if (vector == NULL || size <= 1) {
+        return; /* Nothing to rotate or invalid input */
+    }
+
+    last_element = vector[size - 1];
+
+    /* Shift elements to the right */
+    for (i = size - 1; i > 0; --i) {
+        vector[i] = vector[i - 1];
+    }
+
+    vector[0] = last_element; /* Wrap around */
+}
+
+/*
+ * add_to_vector
+ * Adds a constant angular value (in degrees) to all elements in the
+ * passed vector, normalizing them to the range [0, 360) degrees.
+ *
+ * vector: Array of double-precision angles in degrees.
+ * size: The number of elements in the vector.
+ * offset_deg: The angular value in degrees to add to each element.
+ */
+static void add_to_vector(vector, size, offset_deg)
+    double vector[];
+    int size;
+    double offset_deg;
+{
+    int i;
+    if (vector == NULL || size <= 0) {
+        return; /* Nothing to modify or invalid input */
+    }
+    for (i = 0; i < size; ++i) {
+        vector[i] = normalize_angle_deg(vector[i] + offset_deg); /* normalize_angle_deg from ephemeris.h */
+    }
+}
+/*
+ * generate_astrological_seeds
+ * Produces 12 pseudo-random double-precision values based on an input vector.
+ * based on an input vector of angles (in degrees).
+ * For each of the 12 seeds:
+ *  A 52-element slice of the input_vector is used (sliding window).
+ *  A point on a unit circle starts at an angle of PI/2 (0,1).
+ *  Each of the 52 angles from the slice (converted to radians) is successively
+ *  added to the point's current angle on the circle. The angle is normalized
+ *  after each addition to the range [0, 2*PI).
+ *  After all 52 angles in the slice are processed, the final (x,y) coordinates
+ *  of the point are determined from its final accumulated angle.
+ *  The astrological seed is atan2(final_y, final_x), normalized to the range [0.0, 1.0].
+ *
+ * input_vector: Array of double-precision angles in degrees.
+ *               Expected to have at least 63 elements for 12 seeds with 52-angle slices.
+ * output_seeds: Array to store the 12 generated double-precision seeds (range [0,1]).
+ * Returns 1 on success, 0 on failure (e.g., NULL pointers).
+ */
+
+/* Local helper to normalize an angle in radians to [0, 2*PI) */
+/* Uses my_fmod from ephemeris.c (linked) and PI from ephemeris.h */
+static double normalize_angle_rad_local(angle_rad)
+    double angle_rad;
+{
+    double two_pi;
+    two_pi = 2.0 * PI; /* PI is from ephemeris.h */
+
+    angle_rad = my_fmod(angle_rad, two_pi); /* my_fmod is from ephemeris.c */
+    if (angle_rad < 0.0) {
+        angle_rad += two_pi;
+    }
+    return angle_rad;
+}
+
+int generate_astrological_seeds(input_vector, output_seeds)
+    double input_vector[]; /* Expected to have at least 63 elements for this logic */
+    double output_seeds[]; /* Expected size 12 */
+{
+    /* K&R C: All variable declarations at the top */
+    int seed_idx; /* For iterating 0 to 11 (12 seeds) */
+    int angle_in_slice_idx; /* For iterating 0 to 51 (52 angles per slice) */
+    double current_point_angle_rad; /* Current angle of the point on the unit circle */
+    double input_angle_deg;         /* Angle from input_vector for the current step */
+    double shot_angle_relative_rad; /* Angle of "shot" relative to the tangent */
+    double tangent_angle_rad;       /* Angle of the tangent at current_point_angle_rad */
+    double new_point_angle_rad;     /* Resulting angle on circle after a "shot" */
+    double final_x, final_y;
+    double raw_seed_angle_rad;
+
+    /* Constants for the algorithm */
+    int NUM_SEEDS_TO_PRODUCE = 12;
+    int SLICE_LENGTH = 52;
+    /* PI and DEG_TO_RAD are defined in ephemeris.h */
+
+    if (input_vector == NULL || output_seeds == NULL) {
+        fprintf(stderr, "Error (generate_astrological_seeds): NULL pointer passed.\n");
+        return 0; /* Failure */
+    }
+
+    for (seed_idx = 0; seed_idx < NUM_SEEDS_TO_PRODUCE; ++seed_idx) {
+        current_point_angle_rad = PI / 2.0; /* Initial point (0, 1.0) on unit circle */
+
+        /* Each seed uses a slice of SLICE_LENGTH (52) from input_vector.
+         * The slice for seed_idx starts at input_vector[seed_idx].
+         */
+        for (angle_in_slice_idx = 0; angle_in_slice_idx < SLICE_LENGTH; ++angle_in_slice_idx) {
+            /*
+             * Get angle from the current slice of input_vector (in degrees).
+             * This angle determines the "shot" relative to the tangent.
+             */
+            input_angle_deg = input_vector[seed_idx + angle_in_slice_idx];
+            shot_angle_relative_rad = input_angle_deg * DEG_TO_RAD;
+
+            /* Calculate tangent direction (angle) from current point on circle */
+            tangent_angle_rad = current_point_angle_rad + (PI / 2.0);
+
+            /* Calculate the new point's angle on the circle after the "shot" */
+            new_point_angle_rad = tangent_angle_rad + shot_angle_relative_rad;
+            current_point_angle_rad = normalize_angle_rad_local(new_point_angle_rad);
+        }
+        /* After processing all 52 angles in the slice, calculate final x, y */
+        final_x = cos(current_point_angle_rad);
+        final_y = sin(current_point_angle_rad);
+        raw_seed_angle_rad = atan2(final_y, final_x); /* Range: -PI to PI */
+
+        /* Normalize to [0.0, 1.0] */
+        output_seeds[seed_idx] = (raw_seed_angle_rad + PI) / (2.0 * PI);
+    }
+
+    return 1; /* Success */
+}
+
+/*
+ * select_templates_for_signs
+ * Selects an aphorism template for each of the 12 astrological signs/seeds.
+ * For each seed, it identifies the template (from the total available pool)
+ * whose original index is closest to (seed_value * num_total_templates).
+ * Templates are selected without replacement.
+ *
+ * astrological_seeds: Array of 12 double values (0.0 to 1.0).
+ * num_total_templates: The total number of unique aphorism templates available.
+ * selected_template_indices_out: Array to store the original indices of the
+ *                                selected template for each of the 12 seeds.
+ *                                If a template cannot be assigned (e.g., fewer
+ *                                than 12 templates available), -1 is stored.
+ * Returns the number of seeds for which a template was successfully assigned.
+ */
+int select_templates_for_signs(astrological_seeds, num_total_templates, selected_template_indices_out)
+    double astrological_seeds[]; /* Size 12 */
+    int num_total_templates;
+    int selected_template_indices_out[]; /* Size 12 */
+{
+    /* K&R C: All variable declarations at the top */
+    int is_template_used[MAX_TEMPLATES]; /* From aphorism_utils.h */
+    int i, j;
+    double ideal_target_float;
+    int best_original_idx;
+    double min_abs_diff;
+    double current_abs_diff;
+    int num_assigned;
+
+    if (num_total_templates > MAX_TEMPLATES) {
+        fprintf(stderr, "Error (select_templates_for_signs): num_total_templates (%d) exceeds MAX_TEMPLATES (%d).\n",
+                num_total_templates, MAX_TEMPLATES);
+        for (i = 0; i < 12; ++i) {
+            selected_template_indices_out[i] = -1;
+        }
+        return 0;
+    }
+    
+    for (j = 0; j < num_total_templates; ++j) {
+        is_template_used[j] = APH_FALSE; /* Use APH_FALSE from aphorism_utils.h */
+    }
+    for (i = 0; i < 12; ++i) { /* Initialize output array */
+        selected_template_indices_out[i] = -1;
+    }
+
+    num_assigned = 0;
+    for (i = 0; i < 12; ++i) { /* For each of the 12 seeds/signs */
+        ideal_target_float = astrological_seeds[i] * (double)num_total_templates;
+        
+        best_original_idx = -1;
+        min_abs_diff = DBL_MAX_SUBSTITUTE;
+
+        for (j = 0; j < num_total_templates; ++j) {
+            if (!is_template_used[j]) {
+                current_abs_diff = fabs((double)j - ideal_target_float);
+                if (current_abs_diff < min_abs_diff) {
+                    min_abs_diff = current_abs_diff;
+                    best_original_idx = j;
+                }
+            }
+        }
+
+        if (best_original_idx != -1) {
+            selected_template_indices_out[i] = best_original_idx;
+            is_template_used[best_original_idx] = APH_TRUE; /* Use APH_TRUE */
+            num_assigned++;
+        }
+    }
+    return num_assigned;
+}
+
+/*
+ * fill_template
+ * Fills a selected aphorism template using words chosen by nearest neighbor search
+ * based on a rotating vector of angles. The input angular_vector is modified (rotated).
+ *
+ * template_to_fill_original: The original aphorism template string.
+ * angular_vector: The vector of double-precision angles used for word selection.
+ *                 This vector will be rotated by this function.
+ * num_total_angles_in_vector: The total number of angles in angular_vector.
+ * filled_aphorism_output: Buffer to store the generated aphorism.
+ * filled_aphorism_output_size: Size of the filled_aphorism_output buffer.
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+static int fill_template(template_to_fill_original, angular_vector, num_total_angles_in_vector,
+                         filled_aphorism_output, filled_aphorism_output_size)
+    char *template_to_fill_original;
+    double angular_vector[];
+    int num_total_angles_in_vector;
+    char filled_aphorism_output[];
+    int filled_aphorism_output_size;
+{
+    /* K&R C: All variable declarations at the top */
+    char processed_template_buffer[MAX_TEMPLATE_LEN]; /* From aphorism_utils.h */
+    char *p_orig, *p_proc;
+    int n_needed, v_needed, nv_needed; /* For parsing the processed template */
+    double embedding_angles[NUM_ANGLES_FOR_WORD_SELECTION];
+    char *selected_word;
+    char *p_template_iterator; /* To iterate through processed_template_buffer */
+    int i; /* General loop counter */
+
+    /* Arrays to store dynamically allocated words */
+    /* MAX_TEMPLATE_LEN/3 is a loose upper bound on placeholders. Add some safety. */
+#define MAX_WORDS_COLLECTED (MAX_TEMPLATE_LEN / 3 + 5)
+    char *collected_N_words[MAX_WORDS_COLLECTED];
+    char *collected_V_words[MAX_WORDS_COLLECTED];
+    int n_collected_idx;
+    int v_collected_idx;
+
+    /* Initialize collected word arrays and indices */
+    n_collected_idx = 0;
+    v_collected_idx = 0;
+    for (i = 0; i < MAX_WORDS_COLLECTED; ++i) {
+        collected_N_words[i] = NULL;
+        collected_V_words[i] = NULL;
+    }
+
+    /* Basic input validation */
+    if (template_to_fill_original == NULL || angular_vector == NULL || filled_aphorism_output == NULL) return 0;
+    if (num_total_angles_in_vector < NUM_ANGLES_FOR_WORD_SELECTION) {
+        fprintf(stderr, "Error (fill_template): Not enough angles in vector for word selection (need %d, have %d).\n",
+                NUM_ANGLES_FOR_WORD_SELECTION, num_total_angles_in_vector);
+        return 0;
+    }
+    if (filled_aphorism_output_size <= 0) return 0;
+
+    /* 1. Pre-process template: Convert (NV) to (N) or (V) */
+    p_orig = template_to_fill_original;
+    p_proc = processed_template_buffer;
+    while (*p_orig != '\0' && (p_proc - processed_template_buffer) < (MAX_TEMPLATE_LEN - 4)) { /* Safety for (NV) + null */
+        if (strncmp(p_orig, "(NV)", 4) == 0) {
+            if (num_total_angles_in_vector > 0 && angular_vector[num_total_angles_in_vector - 1] >= 0.0) { /* Positive -> Noun */
+                strcpy(p_proc, "(N)");
+                p_proc += 3;
+            } else { /* Negative or zero -> Verb */
+                strcpy(p_proc, "(V)");
+                p_proc += 3;
+            }
+            p_orig += 4; /* Advance past "(NV)" in original */
+        } else {
+            *p_proc++ = *p_orig++;
+        }
+    }
+    *p_proc = '\0';
+
+    /* 2. Parse the processed template to get actual N and V counts */
+    parse_aphorism_template(processed_template_buffer, &n_needed, &v_needed, &nv_needed);
+    if (nv_needed != 0) {
+        /* This should not happen if pre-processing is correct */
+        fprintf(stderr, "Error (fill_template): (NV) placeholder found after pre-processing.\n");
+        return 0; /* Error state */
+    }
+
+    /* 3. Iterate through processed template, select words, and rotate vector */
+    p_template_iterator = processed_template_buffer;
+    while (*p_template_iterator != '\0') {
+        if (*p_template_iterator == '(') {
+            char *word_category_type = NULL; /* "N" or "V" */
+            char *word_data_file = NULL;
+
+            if (strncmp(p_template_iterator, "(N)", 3) == 0) {
+                word_category_type = "N";
+                word_data_file = "words/nouns.txt";
+                p_template_iterator += 3;
+            } else if (strncmp(p_template_iterator, "(V)", 3) == 0) {
+                word_category_type = "V";
+                word_data_file = "words/verbs.txt";
+                p_template_iterator += 3;
+            } else {
+                p_template_iterator++; /* Not a recognized (N) or (V), skip */
+                continue;
+            }
+
+            if (word_category_type) {
+                for (i = 0; i < NUM_ANGLES_FOR_WORD_SELECTION; ++i) {
+                    embedding_angles[i] = angular_vector[i];
+                }
+                selected_word = find_nearest_neighbor(embedding_angles, word_data_file);
+                if (selected_word == NULL) {
+                    fprintf(stderr, "Error (fill_template): find_nearest_neighbor failed for %s from %s.\n", word_category_type, word_data_file);
+                    goto cleanup_failure;
+                }
+
+                if (strcmp(word_category_type, "N") == 0) {
+                    if (n_collected_idx < MAX_WORDS_COLLECTED) collected_N_words[n_collected_idx++] = selected_word; else goto cleanup_failure_oom;
+                } else { /* "V" */
+                    if (v_collected_idx < MAX_WORDS_COLLECTED) collected_V_words[v_collected_idx++] = selected_word; else goto cleanup_failure_oom;
+                }
+                rotate_double_vector(angular_vector, num_total_angles_in_vector);
+#ifdef DEBUG_ANGULAR_VECTOR_MAIN
+                fprintf(stderr, "[DEBUG_MAIN_APP] Angular vector (size %d) after rotation in fill_template:\n", num_total_angles_in_vector);
+                for (int dbg_idx = 0; dbg_idx < num_total_angles_in_vector; ++dbg_idx) {
+                    fprintf(stderr, "  [%d] = %f\n", dbg_idx, angular_vector[dbg_idx]);
+                    if (dbg_idx >= 9 && dbg_idx < num_total_angles_in_vector -1 ) { /* Print first 10 then stop for brevity */
+                        fprintf(stderr, "  ... (omitting %d more values)\n", num_total_angles_in_vector - 1 - dbg_idx);
+                        break;
+                    }
+                }
+#endif
+            }
+        } else {
+            p_template_iterator++;
+        }
+    }
+
+    if (n_collected_idx != n_needed || v_collected_idx != v_needed) {
+        fprintf(stderr, "Error (fill_template): Word count mismatch (N: %d/%d, V: %d/%d).\n", n_collected_idx, n_needed, v_collected_idx, v_needed);
+        goto cleanup_failure;
+    }
+
+    /* 4. Fill the processed template with collected words */
+    if (!fill_aphorism_template(processed_template_buffer, collected_N_words, n_collected_idx,
+                                collected_V_words, v_collected_idx, NULL, 0, /* No NV words for final fill */
+                                filled_aphorism_output, filled_aphorism_output_size)) {
+        fprintf(stderr, "Error (fill_template): Final fill_aphorism_template call failed.\n");
+        goto cleanup_failure;
+    }
+
+    /* 5. Cleanup dynamically allocated words */
+    for (i = 0; i < n_collected_idx; ++i) if (collected_N_words[i]) free(collected_N_words[i]);
+    for (i = 0; i < v_collected_idx; ++i) if (collected_V_words[i]) free(collected_V_words[i]);
+    return 1; /* Success */
+
+cleanup_failure_oom:
+    fprintf(stderr, "Error (fill_template): Exceeded word collection buffer.\n");
+    if (selected_word) free(selected_word); /* Free the word that couldn't be stored */
+cleanup_failure:
+    for (i = 0; i < n_collected_idx; ++i) if (collected_N_words[i]) free(collected_N_words[i]);
+    for (i = 0; i < v_collected_idx; ++i) if (collected_V_words[i]) free(collected_V_words[i]);
+    return 0; /* Failure */
+}
+
+/* K&R C style main function */
+int main(argc, argv)
+    int argc;
+    char *argv[];
+{
+    char aphorism_templates_storage[MAX_TEMPLATES][MAX_TEMPLATE_LEN];
+    int num_tpls_read;
+    int n_count, v_count, nv_count;
+    char filled_aphorism[MAX_TEMPLATE_LEN];
+
+    /* Example: Using OrbitalElements from ephemeris.h */
+    OrbitalElements all_planets[MAX_PLANETS];
+    PlanetEphem all_planet_ephems_data[MAX_PLANETS]; /* For heliocentric data */
+    ApparentSkyPosition apparent_sky_pos[MAX_PLANETS]; /* For Az/Alt data */
+    int num_planets_loaded;
+    double jd;
+    int year, month, day;
+    double hour, minute, second;
+#ifndef USE_USER_INPUT_DATETIME
+    time_t time_now;
+    struct tm *local_time_now;
+#endif
+    int i; /* Loop counter */
+
+    /* Observer details for apparent sky calculations */
+    int observer_planet_idx = 2; /* Default to Earth (EMBary, index 2 in ephemeris_data.txt) */
+    double observer_latitude_deg = 41.77810;  /* Example: Naperville, IL latitude */
+    double observer_longitude_deg = -88.08260; /* Example: Naperville, IL longitude */
+
+    /* Vector for combined angular separations */
+    double combined_angular_separations[MAX_PLANETS * (MAX_PLANETS - 1)]; /* Max possible from both functions */
+    int num_relative_seps_actual = 0;
+    int num_helio_seps_actual = 0;
+    int total_seps_in_vector = 0;
+    int current_buffer_offset = 0;
+    int max_seps_per_type = MAX_PLANETS * (MAX_PLANETS - 1) / 2; /* Max seps one function type can produce */
+    int k; /* Loop counter for printing separations */
+
+    double astrological_seeds[12]; /* For the new function's output */
+    int m; /* Loop counter for printing seeds */
+    int selected_aphorism_indices[12]; /* For storing indices of selected templates */
+    int num_aphorisms_selected_for_signs;
+
+    /* Initialize global/static data structures */
+    initialize_zodiac_signs();
+
+    /* --- Initialize and use ephemeris functions --- */
+    if (!initialize_orbital_elements_from_file("ephemeris_data.txt", all_planets, &num_planets_loaded)) {
+        fprintf(stderr, "Failed to load ephemeris data. Exiting.\n");
+        return 1;
+    }
+
+    /* Use current system time */
+    time_now = time(NULL);
+    local_time_now = localtime(&time_now);
+    year   = local_time_now->tm_year + 1900;
+    month  = local_time_now->tm_mon + 1;
+    day    = local_time_now->tm_mday;
+    hour   = (double)local_time_now->tm_hour;
+    minute = (double)local_time_now->tm_min;
+    second = (double)local_time_now->tm_sec;
+    printf("\nCalculating for date: %d-%02d-%02d %.0f:%.0f:%.0f UTC\n", year, month, day, hour, minute, second);
+
+    jd = calculate_julian_day(year, month, day, hour, minute, second);
+
+    /* Calculate heliocentric ecliptic coordinates for all planets */
+    for (i = 0; i < num_planets_loaded; i++) {
+        calculate_planet_helio_ecliptic_coords(all_planets[i], jd, &all_planet_ephems_data[i]);
+    }
+
+    /* Validate observer_planet_idx and proceed with observer-dependent calculations */
+    if (observer_planet_idx >= num_planets_loaded || observer_planet_idx < 0) {
+        fprintf(stderr, "Warning: Default observer index %d is invalid for %d loaded planets.\n", observer_planet_idx, num_planets_loaded);
+        if (num_planets_loaded > 0) {
+            observer_planet_idx = 0; /* Fallback to the first loaded planet */
+            fprintf(stderr, "         Using planet '%s' (index %d) as observer instead.\n", all_planets[observer_planet_idx].name, observer_planet_idx);
+        } else {
+            fprintf(stderr, "Error: No planets loaded, cannot set an observer or calculate observer-dependent data.\n");
+            /* Skip observer-dependent calculations if no planets are loaded */
+            goto aphorism_section; /* Jump to aphorism processing */
+        }
+    }
+
+    /* Calculate apparent Az/Alt for the observer */
+    calculate_apparent_az_alt_all_planets(
+        all_planets,
+        all_planet_ephems_data,
+        num_planets_loaded,
+        observer_planet_idx,
+        observer_latitude_deg,
+        observer_longitude_deg,
+        jd,
+        apparent_sky_pos);
+
+    /* Get relative angular separations and store in the combined vector */
+    num_relative_seps_actual = get_relative_angular_separations(
+        apparent_sky_pos,
+        num_planets_loaded,
+        combined_angular_separations + current_buffer_offset,
+        max_seps_per_type
+    );
+    if (num_relative_seps_actual >= 0) {
+        current_buffer_offset += num_relative_seps_actual;
+    } else {
+        fprintf(stderr, "  Error calculating relative angular separations.\n");
+        num_relative_seps_actual = 0; /* Ensure count is non-negative for offset logic */
+    }
+
+    /* Get heliocentric ecliptic angular separations and append to the combined vector */
+    num_helio_seps_actual = get_helio_ecliptic_angular_separations(
+        all_planet_ephems_data,
+        num_planets_loaded,
+        combined_angular_separations + current_buffer_offset,
+        max_seps_per_type
+    );
+    if (num_helio_seps_actual >= 0) {
+        current_buffer_offset += num_helio_seps_actual;
+    } else {
+        fprintf(stderr, "  Error calculating heliocentric ecliptic angular separations.\n");
+        num_helio_seps_actual = 0; /* Ensure count is non-negative */
+    }
+    total_seps_in_vector = current_buffer_offset;
+
+
+    /* Generate astrological seeds if enough data is available */
+    /* New algorithm needs at least (12 - 1) + 52 = 63 elements */
+    if (total_seps_in_vector >= 63) {
+        if (generate_astrological_seeds(combined_angular_separations, astrological_seeds)) {
+            /* for (m = 0; m < 12; ++m) {
+                printf("  Seed #%d: %f\n", m + 1, astrological_seeds[m]);
+            } */
+        } else {
+            fprintf(stderr, "Failed to generate astrological seeds.\n");
+        }
+    } else {
+        printf("\nNot enough angular separations (%d) to generate astrological seeds (need 63).\n",
+               total_seps_in_vector);
+    }
+
+aphorism_section: /* Label for goto if ephemeris part is skipped */
+    if (read_aphorism_templates("aphorism_templates.txt", aphorism_templates_storage, MAX_TEMPLATES, MAX_TEMPLATE_LEN, &num_tpls_read)) {
+        if (num_tpls_read > 0) {
+
+            /* Select aphorism templates for signs if seeds were also generated */
+            if (total_seps_in_vector >= 63) { /* Check if seeds were likely generated */
+                /*printf("\nSelecting aphorism templates for 12 signs...\n"); */
+                num_aphorisms_selected_for_signs = select_templates_for_signs(
+                    astrological_seeds,
+                    num_tpls_read,
+                    selected_aphorism_indices
+                );
+
+                /* Now, fill and print the selected aphorisms */
+                if (num_aphorisms_selected_for_signs > 0) {
+                    for (m = 0; m < 12; ++m) {
+                        if (selected_aphorism_indices[m] != -1) {
+                            char* current_template_str = aphorism_templates_storage[selected_aphorism_indices[m]];
+                            /* printf("--- %s (Template #%d) ---\n", zodiac_signs[m], selected_aphorism_indices[m]); */
+                            
+                            /* Use the new fill_template function */
+                            if (fill_template(current_template_str,
+                                              combined_angular_separations, /* This vector will be rotated */
+                                              total_seps_in_vector,
+                                              filled_aphorism, MAX_TEMPLATE_LEN)) {
+                                printf("  Wisdom for %s:\n    %s\n\n", zodiac_signs[m], filled_aphorism);
+                            } else {
+                                printf("  Could not dynamically generate horoscope for sign %d.\n\n", m + 1);
+                            }
+
+                            /* After filling template for sign m, add offset to the angular vector
+                             * for the next sign's aphorism generation.
+                             */
+                            if (total_seps_in_vector > 0) {
+                                double offset_degrees_to_add = 30.0; /* (2.0 * PI / 12.0) * RAD_TO_DEG */
+                                add_to_vector(combined_angular_separations,
+                                              total_seps_in_vector,
+                                              offset_degrees_to_add);
+#ifdef DEBUG_ANGULAR_VECTOR_MAIN
+                                fprintf(stderr, "[DEBUG_MAIN_APP] Angular vector (size %d) after adding offset (following %s):\n", total_seps_in_vector, zodiac_signs[m]);
+                                for (k = 0; k < total_seps_in_vector; ++k) {
+                                    fprintf(stderr, "  [%d] = %f\n", k, combined_angular_separations[k]);
+                                    if (k >= 9 && k < total_seps_in_vector - 1) { /* Print first 10 then stop for brevity */
+                                        fprintf(stderr, "  ... (omitting %d more values)\n", total_seps_in_vector - 1 - k);
+                                        break;
+                                    }
+                                }
+#endif
+                            }
+                        } /* End if (selected_aphorism_indices[m] != -1) */
+                    }
+                }
+            } else {
+                printf("\nSeeds not generated (or not enough angular separations). Cannot select aphorisms for signs.\n");
+            }
+        } else {
+            printf("No aphorism templates found or file empty.\n");
+        }
+    } else {
+        fprintf(stderr, "Failed to read aphorism templates.\n");
+    }
+
+    return 0;
+}
