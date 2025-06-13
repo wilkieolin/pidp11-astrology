@@ -24,17 +24,17 @@ echo "</head>"
 echo "<body>"
 
 # Process the input file
-while IFS= read -r line; do
+while IFS= read line; do
   case "$line" in
     "Calculating for date:"*)
       echo "<h1>${line}</h1>"
       ;;
     "  Wisdom for "*) # Matches lines starting with two spaces then "Wisdom for "
-      content=$(echo "$line" | sed 's/^[[:space:]]*//') # Remove leading spaces
+      content=`echo "$line" | sed 's/^[ \t]*//'` # Remove leading spaces and tabs
       echo "<h2>${content}</h2>"
       ;;
     "    "*) # Matches lines starting with four spaces
-      content=$(echo "$line" | sed 's/^[[:space:]]*//') # Remove leading spaces
+      content=`echo "$line" | sed 's/^[ \t]*//'` # Remove leading spaces and tabs
       echo "<p>${content}</p>"
       ;;
   esac

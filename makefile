@@ -32,11 +32,6 @@ bare_app: $(BARE_TARGET)
 # $(MAIN_TARGET): $(OBJS)
 #	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS) $(LIBS)
 
-# Updated rule to compile and link source files directly for the target,
-# similar to the one-step command line compilation you used.
-$(TARGET): $(SRCS) aphorism_utils.h ephemeris.h # Dependencies: source files and their main headers
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(TARGET) $(SRCS) $(LIBS)
-
 # Rule to compile and link main_app.c and its dependencies
 $(MAIN_TARGET): $(MAIN_SRCS) aphorism_utils.h ephemeris.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $(MAIN_TARGET) $(MAIN_SRCS) $(LIBS)
