@@ -46,10 +46,38 @@ void parse_aphorism_template( /* char *template_str, int *num_n, int *num_v, int
 int fill_aphorism_template( /* char *template_str, char *nouns[], int num_nouns_avail, char *verbs[], int num_verbs_avail, char *noun_verbs[], int num_noun_verbs_avail, char *output_buffer, int output_buffer_size */ );
 
 /*
+ * update_word_radius
+ * Finds a word in the specified file, increases its radius by a given amount,
+ * and rewrites the file with the new value.
+ * word_to_update: The word whose radius should be modified.
+ * radius_increase: The amount to add to the current radius.
+ * filename: The path to the space-delimited text file.
+ * Returns APH_TRUE on success, APH_FALSE on failure (file not found, word not found, write error).
+ */
+int update_word_radius( /* char *word_to_update, double radius_increase, char *filename */ );
+
+/*
+ * decay_word_radius
+ * Scans a word file and applies an exponential decay to each word's radius,
+ * bringing it closer to a baseline of 1.0 over time. It uses a timestamp
+ * from an auxiliary file (e.g., "access.txt") to calculate the elapsed time
+ * for the decay.
+ * word_filename: The path to the word data file (e.g., "words/nouns.txt").
+ * access_filename: The path to the file storing the last update timestamp.
+ * Returns APH_TRUE on success, APH_FALSE on failure.
+ * NOTE: This function updates the timestamp file upon completion. Calling it
+ * sequentially on multiple word files with the same access file will only
+ * decay the first file, as the time difference for subsequent calls will be zero.
+ */
+int decay_word_radius( /* char *word_filename, char *access_filename */ );
+
+/*
  * find_nearest_neighbor
- * Finds the word in a file whose 49 angular coordinates are closest
- * to the given input_angles. The constant NUM_ANGLES (49) is defined
- * in aphorism_utils.c.
+ * Finds the word in a file whose vector is closest to the given input angles.
+ * The file format is "word radius angle1 ... angle49".
+ * The distance is the cosine distance scaled by the radius, where a larger
+ * radius results in a larger distance.
+ * The constant NUM_ANGLES (49) is defined in aphorism_utils.c.
  * input_angles: An array of doubles representing the target angles.
  * filename: The path to the space-delimited text file.
  * Returns a dynamically allocated string containing the nearest word (caller must free).

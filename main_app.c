@@ -462,6 +462,50 @@ int main(argc, argv)
     /* Initialize global/static data structures */
     initialize_zodiac_signs();
 
+    /* --- Apply exponential decay to word radii --- */
+    /* This logic handles the case where multiple word files share a single timestamp file.
+     * It calls the decay function for the first file, which updates the timestamp.
+     * It then temporarily resets the timestamp to its original value before calling
+     * the decay function for the second file. This ensures both decay calculations
+     * are based on the same original time difference. */
+    {
+        long original_timestamp_val;
+        time_t current_time;
+        FILE *access_file_handle;
+        char *noun_file = "words/nouns.txt";
+        char *verb_file = "words/verbs.txt";
+        char *access_file = "words/access.txt";
+
+        printf("\nApplying radius decay to word lists...\n");
+
+        /* 1. Get the original timestamp before any decay happens. */
+        current_time = time(NULL);
+        original_timestamp_val = (long)current_time; /* Default if file doesn't exist */
+        access_file_handle = fopen(access_file, "r");
+        if (access_file_handle != NULL) {
+            /* If file exists, read the timestamp. If read fails, keep the default. */
+            if (fscanf(access_file_handle, "%ld", &original_timestamp_val) != 1) {
+                original_timestamp_val = (long)current_time;
+            }
+            fclose(access_file_handle);
+        }
+
+        /* 2. Decay the first file (nouns). This will update the access file. */
+        if (!decay_word_radius(noun_file, access_file)) {
+            fprintf(stderr, "Warning: Failed to apply radius decay to '%s'.\n", noun_file);
+        }
+
+        /* 3. Restore the original timestamp to the access file. */
+        access_file_handle = fopen(access_file, "w");
+        if (access_file_handle != NULL) {
+            fprintf(access_file_handle, "%ld\n", original_timestamp_val);
+            fclose(access_file_handle);
+            /* 4. Decay the second file (verbs). It will now use the correct original timestamp. */
+            if (!decay_word_radius(verb_file, access_file)) { fprintf(stderr, "Warning: Failed to apply radius decay to '%s'.\n", verb_file); }
+        } else { fprintf(stderr, "Warning: Could not open '%s' to reset timestamp; decay for '%s' may be skipped.\n", access_file, verb_file); }
+        printf("Radius decay complete.\n");
+    }
+
     /* --- Initialize and use ephemeris functions --- */
     printf("\nInitializing Ephemeris Data...\n");
     if (!initialize_orbital_elements_from_file("ephemeris_data.txt", all_planets, &num_planets_loaded)) {

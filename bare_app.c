@@ -460,6 +460,41 @@ int main(argc, argv)
     /* Initialize global/static data structures */
     initialize_zodiac_signs();
 
+    /* --- Apply exponential decay to word radii --- */
+    /* Handles decaying multiple word files with a shared timestamp file. */
+    {
+        long original_timestamp_val;
+        time_t current_time;
+        FILE *access_file_handle;
+        char *noun_file = "words/nouns.txt";
+        char *verb_file = "words/verbs.txt";
+        char *access_file = "words/access.txt";
+
+        /* 1. Get the original timestamp before any decay happens. */
+        current_time = time(NULL);
+        original_timestamp_val = (long)current_time; /* Default if file doesn't exist */
+        access_file_handle = fopen(access_file, "r");
+        if (access_file_handle != NULL) {
+            if (fscanf(access_file_handle, "%ld", &original_timestamp_val) != 1) {
+                original_timestamp_val = (long)current_time;
+            }
+            fclose(access_file_handle);
+        }
+
+        /* 2. Decay the first file (nouns). */
+        if (!decay_word_radius(noun_file, access_file)) {
+            /* fprintf(stderr, "Warning: Failed to decay %s\n", noun_file); */
+        }
+
+        /* 3. Restore the original timestamp, then decay the second file (verbs). */
+        access_file_handle = fopen(access_file, "w");
+        if (access_file_handle != NULL) {
+            fprintf(access_file_handle, "%ld\n", original_timestamp_val);
+            fclose(access_file_handle);
+            if (!decay_word_radius(verb_file, access_file)) { /* fprintf(stderr, "Warning: Failed to decay %s\n", verb_file); */ }
+        } /* else { fprintf(stderr, "Warning: Could not reset timestamp for %s\n", verb_file); } */
+    }
+
     /* --- Initialize and use ephemeris functions --- */
     if (!initialize_orbital_elements_from_file("ephemeris_data.txt", all_planets, &num_planets_loaded)) {
         fprintf(stderr, "Failed to load ephemeris data. Exiting.\n");

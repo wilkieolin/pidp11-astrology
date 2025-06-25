@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h> /* For strncpy, strlen, strncmp, strcpy, strchr, strtok_r, strdup */
 #include <stdlib.h> /* For strtod, free, NULL (strdup also often uses malloc from here) */
+#include <time.h>   /* For time(), difftime() */
 #include <math.h>   /* For sqrt - assuming this is available in the build environment */
 #include "aphorism_utils.h"
 
@@ -18,6 +19,12 @@
 
 /* Define PI if not available (e.g., in strict K&R C without math.h M_PI) */
 #define MY_PI 3.14159265358979323846
+
+/* Decay rate for word radius. A value of 8.02e-6 causes the "excess" radius (r-1) to halve roughly every 24 hours. */
+#define RADIUS_DECAY_RATE 8.02e-6
+
+/* Amount to increase a word's radius after it has been selected. */
+#define RADIUS_INCREASE 1.0
 
 /* Set to 1 to enable debug prints in find_nearest_neighbor, 0 to disable */
 #define DEBUG_NEAREST_NEIGHBOR_FLAG 0 /* Set to 1 to enable */
@@ -236,13 +243,247 @@ int fill_aphorism_template(template_str,
 }
 
 /**
- * @brief Finds the word in a file whose 49 angular coordinates are closest
- *        to the given input_angles.
+ * @brief Finds a word in a file, increases its radius, and rewrites the file.
+ *
+ * This function reads a given file line by line, searching for a specific word.
+ * When the word is found, it parses the line to find the radius, adds the
+ * specified `radius_increase` to it, and writes the modified line to a
+ * temporary file. All other lines are copied verbatim.
+ * If the word is found and all operations succeed, the original file is
+ * replaced by the temporary file.
  *
  * The file is expected to have lines in the format:
- * word angle1 angle2 ... angle49
+ * word radius angle1 angle2 ...
  *
- * Distance is calculated as the sum of squared differences between angles.
+ * @param word_to_update The word whose radius should be modified.
+ * @param radius_increase The amount to add to the current radius.
+ * @param filename The path to the space-delimited text file.
+ * @return APH_TRUE on success. Returns APH_FALSE if the file cannot be
+ *         opened, a temporary file cannot be created, the word is not found,
+ *         or a file operation (remove/rename) fails.
+ */
+int update_word_radius(word_to_update, radius_increase, filename)
+    char *word_to_update;
+    double radius_increase;
+    char *filename;
+{
+    /* K&R C: All variable declarations at the top of the function block */
+    FILE *in_file, *out_file;
+    char temp_filename[MAX_WORD_LENGTH]; /* Assuming filename isn't excessively long */
+    char line_buffer[MAX_LINE_LENGTH];
+    char original_line[MAX_LINE_LENGTH]; /* To preserve original line for writing */
+    char current_word[MAX_WORD_LENGTH];
+    char *p;
+    int token_len;
+    int word_found = APH_FALSE;
+    int sscanf_ret;
+    double old_radius, new_radius;
+    char *rest_of_line;
+
+    if (word_to_update == NULL || filename == NULL) {
+        return APH_FALSE;
+    }
+
+    /* Create a temporary filename */
+    strcpy(temp_filename, filename);
+    strcat(temp_filename, ".tmp");
+
+    in_file = fopen(filename, "r");
+    if (in_file == NULL) {
+        perror("update_word_radius: Cannot open input file");
+        return APH_FALSE;
+    }
+
+    out_file = fopen(temp_filename, "w");
+    if (out_file == NULL) {
+        perror("update_word_radius: Cannot create temporary file");
+        fclose(in_file);
+        return APH_FALSE;
+    }
+
+    while (fgets(line_buffer, sizeof(line_buffer), in_file) != NULL) {
+        strcpy(original_line, line_buffer); /* Keep a pristine copy */
+        p = line_buffer;
+
+        /* Parse the first word from the line */
+        token_len = 0;
+        while (*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' && *p != '\0' && token_len < MAX_WORD_LENGTH - 1) {
+            current_word[token_len++] = *p++;
+        }
+        current_word[token_len] = '\0';
+
+        /* Check if this is the word to update */
+        if (token_len > 0 && strcmp(current_word, word_to_update) == 0) {
+            word_found = APH_TRUE;
+
+            while (*p == ' ' || *p == '\t') p++;
+            rest_of_line = p;
+
+            sscanf_ret = sscanf(rest_of_line, "%lf", &old_radius);
+            if (sscanf_ret != 1) {
+                fprintf(stderr, "Warning: Could not parse radius for word '%s'. Writing original line.\n", current_word);
+                fputs(original_line, out_file);
+                continue;
+            }
+            new_radius = old_radius + radius_increase;
+            while (*rest_of_line != ' ' && *rest_of_line != '\t' && *rest_of_line != '\n' && *rest_of_line != '\r' && *rest_of_line != '\0') {
+                rest_of_line++;
+            }
+            fprintf(out_file, "%s %f%s", current_word, new_radius, rest_of_line);
+        } else {
+            fputs(original_line, out_file);
+        }
+    }
+
+    fclose(in_file);
+    fclose(out_file);
+
+    if (word_found) {
+        if (remove(filename) != 0) { perror("update_word_radius: Error removing original file"); remove(temp_filename); return APH_FALSE; }
+        if (rename(temp_filename, filename) != 0) { perror("update_word_radius: Error renaming temporary file"); return APH_FALSE; }
+        return APH_TRUE;
+    } else {
+        remove(temp_filename);
+        return APH_FALSE; /* Word not found */
+    }
+}
+
+/**
+ * @brief Applies exponential decay to word radii in a file based on elapsed time.
+ *
+ * This function reads a timestamp from `access_filename` to determine the
+ * time elapsed since the last run. It then reads `word_filename` line by line,
+ * calculating a new, smaller radius for each word based on an exponential
+ * decay formula. The goal is to smoothly return radii to a baseline of 1.0.
+ *
+ * The function writes the updated data to a temporary file and then replaces
+ * the original `word_filename`. Finally, it updates `access_filename` with the
+ * current timestamp.
+ *
+ * @param word_filename The path to the word data file (e.g., "words/nouns.txt").
+ * @param access_filename The path to the file storing the last update timestamp.
+ * @return APH_TRUE on success, APH_FALSE on any failure.
+ * @note Because this function updates the timestamp file upon completion, calling
+ *       it in a loop for multiple word files that share a single timestamp file
+ *       will result in only the first file's radii being decayed.
+ */
+int decay_word_radius(word_filename, access_filename)
+    char *word_filename;
+    char *access_filename;
+{
+    /* K&R C: All variable declarations at the top of the function block */
+    FILE *in_file, *out_file, *access_file;
+    char temp_filename[MAX_WORD_LENGTH];
+    char line_buffer[MAX_LINE_LENGTH];
+    char original_line[MAX_LINE_LENGTH];
+    char current_word[MAX_WORD_LENGTH];
+    char *p, *rest_of_line;
+    int token_len;
+    int sscanf_ret;
+    double old_radius, new_radius;
+    time_t current_time;
+    long last_update_time_long; /* Use long for reading from file */
+    time_t last_update_time;
+    double time_diff_seconds;
+
+    if (word_filename == NULL || access_filename == NULL) {
+        return APH_FALSE;
+    }
+
+    /* 1. Get current time and last update time from access file */
+    current_time = time(NULL);
+    last_update_time = 0; /* Default to 0 */
+
+    access_file = fopen(access_filename, "r");
+    if (access_file != NULL) {
+        if (fscanf(access_file, "%ld", &last_update_time_long) == 1) {
+            last_update_time = (time_t)last_update_time_long;
+        } else {
+            last_update_time = current_time; /* File exists but is empty/corrupt, so no decay */
+        }
+        fclose(access_file);
+    } else {
+        /* File doesn't exist, this is the first run. No decay needed. */
+        last_update_time = current_time;
+    }
+
+    time_diff_seconds = difftime(current_time, last_update_time);
+
+    /* If no time has passed or time went backwards, no decay is needed. */
+    /* We still update the timestamp to the current time and report success. */
+    if (time_diff_seconds <= 0) {
+        access_file = fopen(access_filename, "w");
+        if (access_file == NULL) {
+            perror("decay_word_radius: Cannot open access file for writing");
+            return APH_FALSE;
+        }
+        fprintf(access_file, "%ld\n", (long)current_time);
+        fclose(access_file);
+        return APH_TRUE; /* Success, as no decay was necessary. */
+    }
+
+    /* 2. Create a temporary filename for writing updated word data */
+    strcpy(temp_filename, word_filename);
+    strcat(temp_filename, ".tmp");
+
+    in_file = fopen(word_filename, "r");
+    if (in_file == NULL) { perror("decay_word_radius: Cannot open input word file"); return APH_FALSE; }
+
+    out_file = fopen(temp_filename, "w");
+    if (out_file == NULL) { perror("decay_word_radius: Cannot create temporary file"); fclose(in_file); return APH_FALSE; }
+
+    /* 3. Process each line of the word file */
+    while (fgets(line_buffer, sizeof(line_buffer), in_file) != NULL) {
+        strcpy(original_line, line_buffer);
+        p = line_buffer;
+
+        token_len = 0;
+        while (*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' && *p != '\0' && token_len < MAX_WORD_LENGTH - 1) { current_word[token_len++] = *p++; }
+        current_word[token_len] = '\0';
+
+        if (token_len == 0) { fputs(original_line, out_file); continue; }
+
+        while (*p == ' ' || *p == '\t') p++;
+        rest_of_line = p;
+
+        sscanf_ret = sscanf(rest_of_line, "%lf", &old_radius);
+        if (sscanf_ret != 1) { fprintf(stderr, "Warning: Could not parse radius for word '%s'. Writing original line.\n", current_word); fputs(original_line, out_file); continue; }
+
+        if (old_radius > 1.0) { new_radius = 1.0 + (old_radius - 1.0) * exp(-RADIUS_DECAY_RATE * time_diff_seconds); } else { new_radius = old_radius; }
+
+        while (*rest_of_line != ' ' && *rest_of_line != '\t' && *rest_of_line != '\n' && *rest_of_line != '\r' && *rest_of_line != '\0') { rest_of_line++; }
+
+        fprintf(out_file, "%s %f%s", current_word, new_radius, rest_of_line);
+    }
+
+    fclose(in_file);
+    fclose(out_file);
+
+    /* 4. Replace the original file with the temporary file */
+    if (remove(word_filename) != 0) { perror("decay_word_radius: Error removing original file"); remove(temp_filename); return APH_FALSE; }
+    if (rename(temp_filename, word_filename) != 0) { perror("decay_word_radius: Error renaming temporary file"); return APH_FALSE; }
+
+    /* 5. If all successful, update the access file with the current time */
+    access_file = fopen(access_filename, "w");
+    if (access_file == NULL) {
+        perror("decay_word_radius: Cannot open access file for writing final timestamp");
+        return APH_FALSE;
+    }
+    fprintf(access_file, "%ld\n", (long)current_time);
+    fclose(access_file);
+
+    return APH_TRUE;
+}
+
+/**
+ * @brief Finds the word in a file whose vector is closest to the given input angles.
+ *
+ * The file is expected to have lines in the format:
+ * word radius angle1 angle2 ... angle49
+ *
+ * Distance is calculated as the cosine distance between the angular vectors,
+ * scaled by the word's radius. A larger radius increases the distance, making
+ * the word less likely to be chosen. The word with the minimum scaled distance is chosen.
  *
  * @param input_angles An array of NUM_ANGLES doubles representing the target angles.
  * @param filename The path to the space-delimited text file.
@@ -259,10 +500,11 @@ find_nearest_neighbor(input_angles, filename)
     /* K&R C: All variable declarations at the top of the function block */
     FILE *file;
     char line_buffer[MAX_LINE_LENGTH];
-    char *nearest_word_str; /* Stores the word with the smallest cosine distance */
-    double min_cosine_distance; /* Smallest cosine distance found so far */
+    char *nearest_word_str; /* Stores the word with the smallest distance */
+    double min_distance; /* Smallest scaled distance found so far */
     char current_word[MAX_WORD_LENGTH];
     double file_angles[NUM_ANGLES];
+    double file_radius; /* Radius of the word in spherical coordinates */
     char *p; /* Pointer to walk through the line_buffer */
     char *nl; /* For newline removal */
     int angles_parsed_count;
@@ -277,9 +519,10 @@ find_nearest_neighbor(input_angles, filename)
     double magnitude_file_deg;
     double similarity;
     double current_cosine_distance; /* Current word's cosine distance to input */
+    double current_distance; /* Cosine distance scaled by radius */
 
     nearest_word_str = NULL; /* Initialize */
-    min_cosine_distance = DBL_MAX_SUBSTITUTE; /* Initialize with a large value (cosine distance is 0 to 2) */
+    min_distance = DBL_MAX_SUBSTITUTE; /* Initialize with a large value */
 
     file = fopen(filename, "r");
     if (!file) {
@@ -320,7 +563,28 @@ find_nearest_neighbor(input_angles, filename)
         }
         strcpy(current_word, token_buffer);
 
-        /* 2. Parse the NUM_ANGLES angles */
+        /* 2. Parse the radius */
+        while (*p == ' ') p++; /* Skip leading spaces */
+        if (*p == '\0') {
+            /* fprintf(stderr, "Warning: Line for word '%s' is missing radius and angles.\n", current_word); */
+            continue;
+        }
+        token_len = 0;
+        while (*p != ' ' && *p != '\0' && token_len < MAX_WORD_LENGTH - 1) {
+            token_buffer[token_len++] = *p++;
+        }
+        token_buffer[token_len] = '\0';
+        if (token_len == 0) {
+            /* fprintf(stderr, "Warning: Line for word '%s' is missing radius and angles.\n", current_word); */
+            continue;
+        }
+        sscanf_ret = sscanf(token_buffer, "%lf", &file_radius);
+        if (sscanf_ret != 1) {
+            /* fprintf(stderr, "Warning: Could not parse radius for word '%s'.\n", current_word); */
+            continue;
+        }
+
+        /* 3. Parse the NUM_ANGLES angles */
         angles_parsed_count = 0;
         for (i = 0; i < NUM_ANGLES; ++i) {
             while (*p == ' ') p++; /* Skip leading spaces for the next token */
@@ -351,7 +615,7 @@ find_nearest_neighbor(input_angles, filename)
             continue; /* Skip this line if not all angles were parsed correctly */
         }
 
-        /* 3. Calculate Cosine Distance */
+        /* 4. Calculate Scaled Cosine Distance */
         dot_product = 0.0;
         magnitude_file_deg = 0.0;
 
@@ -373,11 +637,15 @@ find_nearest_neighbor(input_angles, filename)
         if (similarity > 1.0) similarity = 1.0;
         if (similarity < -1.0) similarity = -1.0;
 
-        current_cosine_distance = 1.0 - similarity; /* Cosine distance */
+        current_cosine_distance = 1.0 - similarity;
 
-        /* 4. Update nearest neighbor if this one is closer */
-        if (current_cosine_distance < min_cosine_distance) {
-            min_cosine_distance = current_cosine_distance;
+        /* Scale distance by radius. A larger radius means the word is "further" away. */
+        /* This implements the idea that similarity should decay with radius. */
+        current_distance = current_cosine_distance * file_radius;
+
+        /* 5. Update nearest neighbor if this one is closer */
+        if (current_distance < min_distance) {
+            min_distance = current_distance;
             if (nearest_word_str != NULL) {
                 free(nearest_word_str); /* Free previous word if any */
             }
@@ -389,12 +657,22 @@ find_nearest_neighbor(input_angles, filename)
             }
             if (DEBUG_NEAREST_NEIGHBOR_FLAG) {
                 fprintf(stderr, "[DEBUG_APH_UTIL] New nearest word: '%s' (Distance: %f)\n",
-                        nearest_word_str, min_cosine_distance);
+                        nearest_word_str, min_distance);
             }
         }
     }
 
     fclose(file);
+
+    /* If a nearest word was found, update its radius to make it less likely to be chosen again soon. */
+    if (nearest_word_str != NULL) {
+        if (!update_word_radius(nearest_word_str, RADIUS_INCREASE, filename)) {
+            /* This is a non-fatal warning. The program can continue even if the update fails. */
+            fprintf(stderr, "Warning (find_nearest_neighbor): Failed to update radius for word '%s' in file '%s'.\n",
+                    nearest_word_str, filename);
+        }
+    }
+
     return nearest_word_str; /* Caller must free this */
 }
 
