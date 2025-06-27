@@ -339,11 +339,11 @@ int update_word_radius(word_to_update, radius_increase, filename)
     fclose(out_file);
 
     if (word_found) {
-        if (remove(filename) != 0) { perror("update_word_radius: Error removing original file"); remove(temp_filename); return APH_FALSE; }
+        if (unlink(filename) != 0) { perror("update_word_radius: Error removing original file"); unlink(temp_filename); return APH_FALSE; }
         if (rename(temp_filename, filename) != 0) { perror("update_word_radius: Error renaming temporary file"); return APH_FALSE; }
         return APH_TRUE;
     } else {
-        remove(temp_filename);
+        unlink(temp_filename);
         return APH_FALSE; /* Word not found */
     }
 }
@@ -407,7 +407,7 @@ int decay_word_radius(word_filename, access_filename)
         last_update_time = current_time;
     }
 
-    time_diff_seconds = difftime(current_time, last_update_time);
+    time_diff_seconds = (double)(current_time - last_update_time);
 
     /* If no time has passed or time went backwards, no decay is needed. */
     /* We still update the timestamp to the current time and report success. */
@@ -460,7 +460,7 @@ int decay_word_radius(word_filename, access_filename)
     fclose(out_file);
 
     /* 4. Replace the original file with the temporary file */
-    if (remove(word_filename) != 0) { perror("decay_word_radius: Error removing original file"); remove(temp_filename); return APH_FALSE; }
+    if (unlink(word_filename) != 0) { perror("decay_word_radius: Error removing original file"); unlink(temp_filename); return APH_FALSE; }
     if (rename(temp_filename, word_filename) != 0) { perror("decay_word_radius: Error renaming temporary file"); return APH_FALSE; }
 
     /* 5. If all successful, update the access file with the current time */
