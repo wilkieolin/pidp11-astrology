@@ -440,8 +440,8 @@ int main(argc, argv)
 
     /* Observer details for apparent sky calculations */
     int observer_planet_idx = 2; /* Default to Earth (EMBary, index 2 in ephemeris_data.txt) */
-    double observer_latitude_deg = 41.77810;  /* Example: Naperville, IL latitude */
-    double observer_longitude_deg = -88.08260; /* Example: Naperville, IL longitude */
+    double observer_latitude_deg = 41.87869;  /* Example: Chicago, IL latitude */
+    double observer_longitude_deg = -87.63560; /* Example: Chicago, IL longitude */
 
     /* Vector for combined angular separations */
     double combined_angular_separations[MAX_PLANETS * (MAX_PLANETS - 1)]; /* Max possible from both functions */
